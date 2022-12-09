@@ -4,7 +4,7 @@ using Distributions
 using InteractiveDynamics
 using GLMakie
 
-
+zeros(Int, 1)
 # geneic traits of all fish
 @agent Smelt GridAgent{2} begin
     energy::Float64               # current energy level
@@ -37,7 +37,9 @@ properties = (
     countdown = zeros(Int, dims),
     regrowth_time = regrowth_time,
     basal_resource = zeros(Float64, dims),
+    tick = Int64(0),
 )
+
 
 model = ABM(Smelt, space;
     properties, rng, scheduler = Schedulers.randomly, warn = false
@@ -122,9 +124,10 @@ end
 #    return
 #end
 
-#function grass_step!(model)
-#    model.tick[1] += 1
-#end
+function grass_step!(model)
+    model.tick[1] += 1
+end
+
 
 
 
@@ -140,30 +143,30 @@ end
 # sheepwolfgrass[1]
 # sheepwolfgrass[1].pos
 
-#offset(a) = a isa Smelt ? (-0.1, -0.1*rand()) : (+0.1, +0.1*rand())
-#ashape(a) = a isa Smelt ? :circle : :utriangle
-#acolor(a) = a isa Smelt ? RGBf(rand(3)...) : RGBAf(0.2, 0.2, 0.3, 0.8)
+offset(a) = a isa Smelt ? (-0.1, -0.1*rand()) : (+0.1, +0.1*rand())
+ashape(a) = a isa Smelt ? :circle : :utriangle
+acolor(a) = a isa Smelt ? RGBf(rand(3)...) : RGBAf(0.2, 0.2, 0.3, 0.8)
 
-#grasscolor(model) = model.countdown ./ model.regrowth_time
+grasscolor(model) = model.countdown ./ model.regrowth_time
 
-#heatkwargs = (colormap = [:brown, :green], colorrange = (0, 1))
+heatkwargs = (colormap = [:brown, :green], colorrange = (0, 1))
 
-#plotkwargs = (;
-#    ac = acolor,
-#    as = 25,
-#    am = ashape,
-#    offset,
-#    scatterkwargs = (strokewidth = 1.0, strokecolor = :black),
-#    heatarray = grasscolor,
-#    heatkwargs = heatkwargs,
-#)
+plotkwargs = (;
+    ac = acolor,
+    as = 25,
+    am = ashape,
+    offset,
+    scatterkwargs = (strokewidth = 1.0, strokecolor = :black),
+    heatarray = grasscolor,
+    heatkwargs = heatkwargs,
+)
 
-#sheepwolfgrass = initialize_model()
+sheepwolfgrass = initialize_model()
 
-#fig, ax, abmobs = abmplot(sheepwolfgrass;
-#    agent_step! = sheepwolf_step!,
-#plotkwargs...)
-#fig
+fig, ax, abmobs = abmplot(sheepwolfgrass;
+    agent_step! = sheepwolf_step!,
+plotkwargs...)
+fig
 
 
 
@@ -173,11 +176,15 @@ sheepwolfgrass = initialize_model()
 steps = 10
 
 adata = [:pos, :energy, :length]
-#mdata = [:tick]
+mdata = [:tick]
 
-#adf, mdf = run!(sheepwolfgrass, sheepwolf_step!, steps; adata, mdata)
-adf = run!(sheepwolfgrass, sheepwolf_step!, steps; adata)
+ adf, mdf = run!(sheepwolfgrass, sheepwolf_step!, grass_step!, steps; adata, mdata)
+adf = run!(sheepwolfgrass, sheepwolf_step!, grass_step!, steps; adata)
 
-adf
 
-m
+mdf[:, 2][3][1]
+
+Int64(0)
+
+
+sheepwolfgrass

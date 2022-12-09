@@ -1,3 +1,6 @@
+# latest fully working version, only edit this with working updates.
+# Otherwise work in minimal_PP_model_prototyping.jl
+
 using Agents
 using Random
 using Distributions
