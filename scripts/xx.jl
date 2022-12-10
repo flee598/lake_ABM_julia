@@ -22,7 +22,7 @@ space = GridSpace(dims, periodic = false)
 # Model properties
 properties = (
     fully_grown = falses(dims),
-    tick =  Int64[0]
+    tick =  Int
 )
 
 model = ABM(Smelt, space;
