@@ -35,11 +35,12 @@ space = GridSpace(dims, periodic = false)
 
 
 # Model properties
-properties = (
-    fully_grown = falses(dims),
-    countdown = zeros(Int, dims),
-    regrowth_time = regrowth_time,
-    basal_resource = zeros(Float64, dims),
+properties = Dict(
+    :fully_grown => falses(dims),
+    :countdown => zeros(Int, dims),
+    :regrowth_time => regrowth_time,
+    :basal_resource => zeros(Float64, dims),
+    :tick => 0,
 )
 
 model = ABM(Smelt, space;
@@ -125,9 +126,9 @@ end
 #    return
 #end
 
-#function grass_step!(model)
-#    model.tick[1] += 1
-#end
+function grass_step!(model)
+    model.tick += 1
+end
 
 
 
@@ -143,7 +144,7 @@ end
 # sheepwolfgrass[1]
 # sheepwolfgrass[1].pos
 
-offset(a) = a isa Smelt ? (-0.1, -0.1*rand()) : (+0.1, +0.1*rand())
+#= offset(a) = a isa Smelt ? (-0.1, -0.1*rand()) : (+0.1, +0.1*rand())
 ashape(a) = a isa Smelt ? :circle : :utriangle
 acolor(a) = a isa Smelt ? RGBf(rand(3)...) : RGBAf(0.2, 0.2, 0.3, 0.8)
 
@@ -159,7 +160,7 @@ plotkwargs = (;
     scatterkwargs = (strokewidth = 1.0, strokecolor = :black),
     heatarray = grasscolor,
     heatkwargs = heatkwargs,
-)
+) =#
 
 #sheepwolfgrass = initialize_model()
 
@@ -172,15 +173,14 @@ plotkwargs = (;
 
 # data collection 
 
-#sheepwolfgrass = initialize_model()
-#steps = 10
+sheepwolfgrass = initialize_model()
+steps = 10
 
-#adata = [:pos, :energy, :length]
-#mdata = [:tick]
+adata = [:pos, :energy, :length]
+mdata = [:fully_grown, :tick]
 
-#adf, mdf = run!(sheepwolfgrass, sheepwolf_step!, steps; adata, mdata)
-#adf = run!(sheepwolfgrass, sheepwolf_step!, steps; adata)
+adf, mdf = run!(sheepwolfgrass, sheepwolf_step!, grass_step!, steps; adata, mdata)
+# adf = run!(sheepwolfgrass, sheepwolf_step!, steps; adata)
 
-#adf
-
-#adf
+adf
+mdf
