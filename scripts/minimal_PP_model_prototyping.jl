@@ -17,33 +17,38 @@ using GLMakie
     mortality_reproduction::Float64   # probability of mortality after reproduction
     resource_pref_adult::Float64      # smelt/koaro: 1 = pelagic, 2 = littoral, trout: 1 = smelt, 2 = koaro
     resource_pref_juv::Float64        # smelt/koaro: 1 = pelagic, 2 = littoral, trout: 1 = smelt, 2 = koaro
+    stage::Int64                      # 0 = juvenile, 1 = adult
+    growth_rate::Float64              # growth rate
+    size_mature::Float64              # size individual transitions from juv to adult
+    fecundity_mean::Int64             # mean number larvae produced
+    fecundity_sd::Int64               # SD number larvae produced
 end
-
 
 # initialize model --------------------------------------------------------------------------
 # note - starting out with just smelt/pelagic, will need variables below for koaro and trout and littoral
 
 function initialize_model(;
-    dims = (20, 20),                  # grid size
+    dims = (5, 5),                  # grid size
     cell_resource_growth_lit = 20,    # cell resource growth rate - littoral resources - draw from distribution?
     cell_resource_growth_pel = 20,    # cell resource growth rate - pelagic resources - draw from distribution?
-    cell_resource_k_pel = 20,         # cell resource carrying capacity - pelagic - draw from distribution?
-    cell_resource_k_lit = 20,         # cell resource carrying capacity - littoral - draw from distribution?
-    n_smelt = 3,                      # initial number of smelt
+    cell_resource_k_lit = 100,        # cell resource carrying capacity - littoral - draw from distribution?
+    cell_resource_k_pel = 100,        # cell resource carrying capacity - littoral - draw from distribution?
+    n_smelt = 1,                      # initial number of smelt
     Δenergy_smelt = 5.0,              # energy gained from eating 1 unit resource - draw from distribution?
-    consume_amount_smelt = 5.0,       # max amount consumed in 1 timestep - draw from distribution?
-    breed_prob_smelt = 0.9,           # probability of spawning (during seasonal window only) - draw from distribution?
+    consume_amount_smelt = 10.0,       # max amount consumed in 1 timestep - draw from distribution?
+    breed_prob_smelt = 0.0,           # probability of spawning (during seasonal window only) - draw from distribution?
     breed_mortality_smelt = 0.5,      # probability of dying after spawning - draw from distribution?
     growth_rate_smelt = 1.0,          # mm growth / time step - draw from distribution?
     length_mean_smelt = 15.0,         # mean adult smelt length - used for setting initial lengths
-    length_sd_smelt = 3.0,            # SD adult smelt length - used for setting initial lengths
+    length_sd_smelt = 1.0,            # SD adult smelt length - used for setting initial lengths
     vision_smelt = 1,                 # number of cells smelt can "see"
-    n_juv_mean_smelt = 1000,          # mean number of juveniles produced by 1 female (note this is juveniles, not eggs)
-    n_juv_sd_smelt = 100,             # SD number of juveniles produced by 1 female (note this is juveniles, not eggs)
-    size_maturity_smelt = 10,         # size (mm) when smelt transition from juvenile to adult
+    n_juv_mean_smelt = 100,          # mean number of juveniles produced by 1 female (note this is juveniles, not eggs)
+    n_juv_sd_smelt = 10,             # SD number of juveniles produced by 1 female (note this is juveniles, not eggs)
+    size_maturity_smelt = 10.0,         # size (mm) when smelt transition from juvenile to adult
     mortality_random_smelt = 0.01,    # probability of random mortality each timestep - draw from distribution?
-    resource_pref_adult_smelt = 1.0,  # adult smelt preference for pelagic (1) or littoral (0) resources
+    resource_pref_adult_smelt = 1.0,  # adult smelt preference for (1) pelagic (0) littoral resources - but if koaro larvae present consume them
     resource_pref_juv_smelt = 1.0,    # juvenile preference for pelagic (1) or littoral (0) resources
+    stage = 1,
     seed = 23182,
 )
 
@@ -59,29 +64,47 @@ m1[:, size(m1, 2) - m1_add:size(m1, 2)] .= 1
 m1[:, 1:1 + m1_add] .= 1
 
 
+
 # Model properties
 properties = Dict(
     :fully_grown => falses(dims),
     :countdown => zeros(Int, dims),
-    :regrowth_time => regrowth_time,
     :basal_resource => zeros(Float64, dims),
     :basal_resource_type => m1,
+    :cell_resource_growth_lit => cell_resource_growth_lit::Int64,
+    :cell_resource_growth_pel => cell_resource_growth_pel::Int64,
+    :cell_resource_k_lit => cell_resource_k_lit::Int64,
+    :cell_resource_k_pel => cell_resource_k_pel::Int64,
     :tick => 0::Int64,
-)
+    )
 
 model = ABM(Smelt, space;
     properties, rng, scheduler = Schedulers.randomly, warn = false
 )
 
-# Add agents
+# Add agents - need to figure out how to add different types of agents
 for _ in 1:n_smelt
     energy = rand(model.rng, 1:(Δenergy_smelt*2)) - 1
     Δenergy = Δenergy_smelt
     reproduction = breed_prob_smelt
-    length = round(rand(Normal(length_smelt_mean, 1), 1)[1], digits = 3)
-    pelagic_pref = pelagic_pref_smelt
-    add_agent!(Smelt, model, energy, Δenergy, reproduction, length, pelagic_pref)
+    consume_amount = consume_amount_smelt
+    length = round(rand(Normal(length_mean_smelt, length_sd_smelt), 1)[1], digits = 3)
+    vision_range = vision_smelt
+    mortality_random = mortality_random_smelt
+    mortality_reproduction = breed_mortality_smelt
+    resource_pref_adult = resource_pref_adult_smelt
+    resource_pref_juv = resource_pref_juv_smelt
+    stage = stage
+    growth_rate = growth_rate_smelt
+    size_mature = size_maturity_smelt
+    fecundity_mean = n_juv_mean_smelt
+    fecundity_sd = n_juv_sd_smelt
+
+    # params here must be in the same order as the @agent section above
+    add_agent!(Smelt, model, energy, Δenergy, reproduction, consume_amount, length, vision_range, mortality_random,
+               mortality_reproduction, resource_pref_adult, resource_pref_juv, stage, growth_rate, size_mature, fecundity_mean, fecundity_sd)
 end
+
 
 # Add basal resource at random initial levels
 for p in positions(model)
@@ -95,22 +118,51 @@ return model
 end
 
 
+
+
 # define agent movement --------------------------------------------------------------------------
 function sheepwolf_step!(smelt::Smelt, model)
-    #walk!(smelt, rand, model)
-    near_cells = nearby_positions(smelt.pos, model, 1)
 
-    # find which of the nearby cells have resources
-    grassy_cells = [] # do I need to predefine the type here?
+# ISSUE - currently agents stop moving after ~20 ticks ... because surrounded with no resource?
 
-    for cell in near_cells
-        if model.fully_grown[cell...]
-            push!(grassy_cells, cell)
+
+    # check if current pos has resources, - will need to update to check if predator is present 
+    
+    # check resources in current pos, if none, move
+ #=    if model.basal_resource[smelt.pos...] < 0
+
+        # get id of near cells
+        near_cells = nearby_positions(smelt.pos, model, 1)
+        
+        # storage
+        grassy_cells = [] # do I need to predefine the type here?
+        
+        # find which of the nearby cells have resources
+        for cell in near_cells
+            # is basal_resource > 0?
+            if model.basal_resource[cell...] > 0
+                # if yes, store cell ID
+                push!(grassy_cells, cell)
+            end
         end
-    end
 
-    # randomly choose one of the nearby cells with resources
-    move_agent!(smelt, sample(grassy_cells, 1)[1], model)
+        # if there is a neighbouring cell with resources > 0, randomly select one to move to
+        if length(grassy_cells) > 0
+
+            # randomly choose one of the nearby cells with resources
+            move_agent!(smelt, sample(grassy_cells, 1)[1], model)
+
+        else
+            # if non of the near cells have resources, just pick one at random
+            move_agent!(smelt, sample(near_cells, 1)[1], model)
+        end
+    end =#
+
+    near_cells = nearby_positions(smelt.pos, model, 1)
+    
+
+    #move_agent!(smelt, sample(near_cells.itr.iter, 1)[1], model)
+    walk!(smelt, sample(near_cells.itr.iter, 1)[1], model)
 
     # each time step smelt loose 0.5 unit of energy, if 0 die
     smelt.energy -= 0.5
@@ -131,12 +183,13 @@ function sheepwolf_step!(smelt::Smelt, model)
 end
 
 
+
 # define agent eating -----------------------------------------------------------------------------
 function eat!(smelt::Smelt, model)
     if model.basal_resource[smelt.pos...] > 0       # if there are rsources available 
         smelt.energy += smelt.Δenergy               # give smelt energy
         smelt.length += smelt.Δenergy               # grow smelt
-        model.basal_resource[smelt.pos...] -= 0.1   # and reduce resources
+        model.basal_resource[smelt.pos...] -= smelt.consume_amount   # and reduce resources
         # currently resources can go negative ... fix
     end
     return
@@ -149,12 +202,16 @@ function reproduce_smelt!(agent::A, model) where {A}
     length = 12
     energy = 10.0
     Δenergy = agent.Δenergy/2
-    offspring = A(id, agent.pos, energy, Δenergy, agent.reproduction, length, agent.pelagic_pref)
+    stage = 0
+    offspring = A(id, agent.pos, energy, Δenergy, agent.reproduction, agent.consume_amount, length,
+    agent.vision_range, agent.mortality_random, agent.mortality_reproduction, agent.resource_pref_adult,
+    agent.resource_pref_juv, stage, agent.growth_rate, agent.size_mature, agent.fecundity_mean, agent.fecundity_sd)
+
 
     # adding the agent  - should be added to pelagic
     add_agent_pos!(offspring, model)
 
-    # adults die based on probability - high for testing
+    # adults die based on probability - high for testing - will this kill all agents or is it run run for each agent?
     if rand(model.rng) > 0.99
         kill_agent!(smelt, model)
     end
@@ -174,7 +231,7 @@ set(a) = a isa Smelt ? (-0.1, -0.1*rand()) : (+0.1, +0.1*rand())
 ashape(a) = a isa Smelt ? :circle : :utriangle
 acolor(a) = a isa Smelt ? RGBf(rand(3)...) : RGBAf(0.2, 0.2, 0.3, 0.8)
 
-grasscolor(model) = model.countdown ./ model.regrowth_time
+grasscolor(model) = model.countdown
 
 heatkwargs = (colormap = [:brown, :green], colorrange = (0, 1))
 
@@ -199,15 +256,19 @@ fig, ax, abmobs = abmplot(sheepwolfgrass;
 plotkwargs...)
 fig
 
+#= 
 # data collection 
 
 sheepwolfgrass = initialize_model()
-steps = 5
-adata = [:pos, :energy, :Δenergy, :length, :pelagic_pref]
-mdata = [:basal_resource_type, :tick]
+steps = 100
+adata = [:pos, :energy, :Δenergy, :reproduction, :consume_amount, :length, :vision_range, :mortality_random,
+:mortality_reproduction, :resource_pref_adult, :resource_pref_juv, :stage, :growth_rate, :size_mature, :fecundity_mean, :fecundity_sd]
+mdata = [:basal_resource, :tick]
 
 adf, mdf = run!(sheepwolfgrass, sheepwolf_step!, grass_step!, steps; adata, mdata)
 
 
 adf
 mdf
+
+mdf[:,2][20] =#
