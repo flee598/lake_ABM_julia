@@ -3,6 +3,7 @@ using Random
 using Distributions
 using InteractiveDynamics
 using GLMakie
+using StatsBase
 
 # define agents -----------------------------------------------------------------------------
 # geneic traits of all fish
@@ -29,10 +30,10 @@ end
 
 function initialize_model(;
     dims = (5, 5),                  # grid size
-    cell_resource_growth_lit = 20,    # cell resource growth rate - littoral resources - draw from distribution?
-    cell_resource_growth_pel = 20,    # cell resource growth rate - pelagic resources - draw from distribution?
-    cell_resource_k_lit = 100,        # cell resource carrying capacity - littoral - draw from distribution?
-    cell_resource_k_pel = 100,        # cell resource carrying capacity - littoral - draw from distribution?
+    cell_resource_growth_lit = 10.0,    # cell resource growth rate - littoral resources - draw from distribution?
+    cell_resource_growth_pel = 20.0,    # cell resource growth rate - pelagic resources - draw from distribution?
+    cell_resource_k_lit = 100.0,        # cell resource carrying capacity - littoral - draw from distribution?
+    cell_resource_k_pel = 50.0,        # cell resource carrying capacity - littoral - draw from distribution?
     n_smelt = 1,                      # initial number of smelt
     Δenergy_smelt = 5.0,              # energy gained from eating 1 unit resource - draw from distribution?
     consume_amount_smelt = 10.0,       # max amount consumed in 1 timestep - draw from distribution?
@@ -71,10 +72,10 @@ properties = Dict(
     :countdown => zeros(Int, dims),
     :basal_resource => zeros(Float64, dims),
     :basal_resource_type => m1,
-    :cell_resource_growth_lit => cell_resource_growth_lit::Int64,
-    :cell_resource_growth_pel => cell_resource_growth_pel::Int64,
-    :cell_resource_k_lit => cell_resource_k_lit::Int64,
-    :cell_resource_k_pel => cell_resource_k_pel::Int64,
+    :cell_resource_growth_lit => cell_resource_growth_lit::Float64,
+    :cell_resource_growth_pel => cell_resource_growth_pel::Float64,
+    :cell_resource_k_lit => cell_resource_k_lit::Float64,
+    :cell_resource_k_pel => cell_resource_k_pel::Float64,
     :tick => 0::Int64,
     )
 
@@ -125,11 +126,10 @@ function sheepwolf_step!(smelt::Smelt, model)
 
 # ISSUE - currently agents stop moving after ~20 ticks ... because surrounded with no resource?
 
-
     # check if current pos has resources, - will need to update to check if predator is present 
     
     # check resources in current pos, if none, move
- #=    if model.basal_resource[smelt.pos...] < 0
+     if model.basal_resource[smelt.pos...] < 0
 
         # get id of near cells
         near_cells = nearby_positions(smelt.pos, model, 1)
@@ -149,20 +149,31 @@ function sheepwolf_step!(smelt::Smelt, model)
         # if there is a neighbouring cell with resources > 0, randomly select one to move to
         if length(grassy_cells) > 0
 
+            # First, determine if near cells are pel or lit and generate a vector of weights
+            # get resource type for grassy cells
+            ind1  = [model.basal_resource_type[t...] for t in grassy_cells]
+            ind1 = convert(Array{Float64, 1}, ind1)
+
+            # pel and lit weights
+            pel_p = smelt.resource_pref_adult
+            lit_p = 1.0 - pel_p
+
+            # convert pel/lit indicies to weights
+            ind1[ind1 .== 1.0] .= pel_p
+            ind1[ind1 .== 0] .= lit_p
+
             # randomly choose one of the nearby cells with resources
-            move_agent!(smelt, sample(grassy_cells, 1)[1], model)
+            m_to = sample(grassy_cells, Weights(ind1))
 
+
+            # move
+            move_agent!(smelt, m_to, model)
         else
-            # if non of the near cells have resources, just pick one at random
-            move_agent!(smelt, sample(near_cells, 1)[1], model)
+            # if none of the near cells have resources, just pick one at random
+            near_cells = nearby_positions(smelt.pos, model, 1)
+            walk!(smelt, sample(near_cells.itr.iter, 1)[1], model)
         end
-    end =#
-
-    near_cells = nearby_positions(smelt.pos, model, 1)
-    
-
-    #move_agent!(smelt, sample(near_cells.itr.iter, 1)[1], model)
-    walk!(smelt, sample(near_cells.itr.iter, 1)[1], model)
+    end 
 
     # each time step smelt loose 0.5 unit of energy, if 0 die
     smelt.energy -= 0.5
@@ -219,7 +230,27 @@ function reproduce_smelt!(agent::A, model) where {A}
 end
 # define model counter --------------------------------------------------------------------------------
 
+#= function grass_step!(model)
+    resource_grow!(model)
+    model.tick += 1
+end =#
+
+# (1 = pelagic 0 = littoral)
 function grass_step!(model)
+    for p in positions(model)
+        if model.basal_resource_type[p...] == 1
+            model.basal_resource[p...] += model.cell_resource_growth_lit
+            
+            if model.basal_resource[p...] > model.cell_resource_k_lit
+                model.basal_resource[p...] = model.cell_resource_k_lit
+            end
+        else
+            model.basal_resource[p...] += model.cell_resource_growth_pel
+            if model.basal_resource[p...] > model.cell_resource_k_pel
+                model.basal_resource[p...] = model.cell_resource_k_pel
+            end
+        end
+    end
     model.tick += 1
 end
 
@@ -231,9 +262,9 @@ set(a) = a isa Smelt ? (-0.1, -0.1*rand()) : (+0.1, +0.1*rand())
 ashape(a) = a isa Smelt ? :circle : :utriangle
 acolor(a) = a isa Smelt ? RGBf(rand(3)...) : RGBAf(0.2, 0.2, 0.3, 0.8)
 
-grasscolor(model) = model.countdown
+grasscolor(model) = model.basal_resource_type
 
-heatkwargs = (colormap = [:brown, :green], colorrange = (0, 1))
+heatkwargs = (colormap = [:green, :brown], colorrange = (0, 1))
 
 plotkwargs = (;
     ac = acolor,
@@ -256,19 +287,38 @@ fig, ax, abmobs = abmplot(sheepwolfgrass;
 plotkwargs...)
 fig
 
-#= 
+
 # data collection 
 
 sheepwolfgrass = initialize_model()
-steps = 100
+steps = 10
 adata = [:pos, :energy, :Δenergy, :reproduction, :consume_amount, :length, :vision_range, :mortality_random,
 :mortality_reproduction, :resource_pref_adult, :resource_pref_juv, :stage, :growth_rate, :size_mature, :fecundity_mean, :fecundity_sd]
-mdata = [:basal_resource, :tick]
+mdata = [:basal_resource, :basal_resource_type, :tick, :cell_resource_growth_pel, :cell_resource_growth_lit]
 
-adf, mdf = run!(sheepwolfgrass, sheepwolf_step!, grass_step!, steps; adata, mdata)
+# obtainer = copy - use this if you need to update the mdf output - by default if the output is mutable container it 
+# won't show updates. using obtainer = copy will reduce performance, only use for prototyping 
+adf, mdf = run!(sheepwolfgrass, sheepwolf_step!, grass_step!, steps; adata, mdata, obtainer = deepcopy)
 
 
 adf
+
 mdf
 
-mdf[:,2][20] =#
+mdf[:,3][1] 
+
+mdf[:,2][1] 
+mdf[:,2][2] 
+mdf[:,2][3] 
+mdf[:,2][4] 
+mdf[:,2][10] 
+
+
+xx = mdf[:,2][1]
+xx
+
+
+
+filter(row -> row.id == 1, adf)
+
+
