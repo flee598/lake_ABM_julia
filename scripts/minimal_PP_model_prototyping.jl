@@ -29,12 +29,12 @@ end
 # note - starting out with just smelt/pelagic, will need variables below for koaro and trout and littoral
 
 function initialize_model(;
-    dims = (5, 5),                  # grid size
-    cell_resource_growth_lit = 10.0,    # cell resource growth rate - littoral resources - draw from distribution?
-    cell_resource_growth_pel = 20.0,    # cell resource growth rate - pelagic resources - draw from distribution?
+    dims = (15, 15),                  # grid size
+    cell_resource_growth_lit = 5.0,    # cell resource growth rate - littoral resources - draw from distribution?
+    cell_resource_growth_pel = 7.0,    # cell resource growth rate - pelagic resources - draw from distribution?
     cell_resource_k_lit = 100.0,        # cell resource carrying capacity - littoral - draw from distribution?
     cell_resource_k_pel = 50.0,        # cell resource carrying capacity - littoral - draw from distribution?
-    n_smelt = 1,                      # initial number of smelt
+    n_smelt = 3,                      # initial number of smelt
     Δenergy_smelt = 5.0,              # energy gained from eating 1 unit resource - draw from distribution?
     consume_amount_smelt = 10.0,       # max amount consumed in 1 timestep - draw from distribution?
     breed_prob_smelt = 0.0,           # probability of spawning (during seasonal window only) - draw from distribution?
@@ -46,9 +46,9 @@ function initialize_model(;
     n_juv_mean_smelt = 100,          # mean number of juveniles produced by 1 female (note this is juveniles, not eggs)
     n_juv_sd_smelt = 10,             # SD number of juveniles produced by 1 female (note this is juveniles, not eggs)
     size_maturity_smelt = 10.0,         # size (mm) when smelt transition from juvenile to adult
-    mortality_random_smelt = 0.01,    # probability of random mortality each timestep - draw from distribution?
-    resource_pref_adult_smelt = 1.0,  # adult smelt preference for (1) pelagic (0) littoral resources - but if koaro larvae present consume them
-    resource_pref_juv_smelt = 1.0,    # juvenile preference for pelagic (1) or littoral (0) resources
+    mortality_random_smelt = 0.0001,    # probability of random mortality each timestep - draw from distribution?
+    resource_pref_adult_smelt = 0.99,  # adult smelt preference for (1) pelagic (0) littoral resources - but if koaro larvae present consume them
+    resource_pref_juv_smelt = 0.99,    # juvenile preference for pelagic (1) or littoral (0) resources
     stage = 1,
     seed = 23182,
 )
@@ -76,7 +76,7 @@ properties = Dict(
     :cell_resource_growth_pel => cell_resource_growth_pel::Float64,
     :cell_resource_k_lit => cell_resource_k_lit::Float64,
     :cell_resource_k_pel => cell_resource_k_pel::Float64,
-    :tick => 0::Int64,
+    :tick => 1::Int64,
     )
 
 model = ABM(Smelt, space;
@@ -118,9 +118,6 @@ end
 return model
 end
 
-
-
-
 # define agent movement --------------------------------------------------------------------------
 function sheepwolf_step!(smelt::Smelt, model)
 
@@ -129,10 +126,10 @@ function sheepwolf_step!(smelt::Smelt, model)
     # check if current pos has resources, - will need to update to check if predator is present 
     
     # check resources in current pos, if none, move
-     if model.basal_resource[smelt.pos...] < 0
+     if model.basal_resource[smelt.pos...] < 1
 
-        # get id of near cells
-        near_cells = nearby_positions(smelt.pos, model, 1)
+        # get id of near cells - vision_range = range agent can "see"
+        near_cells = nearby_positions(smelt.pos, model, smelt.vision_range)
         
         # storage
         grassy_cells = [] # do I need to predefine the type here?
@@ -177,7 +174,7 @@ function sheepwolf_step!(smelt::Smelt, model)
 
     # each time step smelt loose 0.5 unit of energy, if 0 die
     smelt.energy -= 0.5
-    if smelt.energy < 0
+    if smelt.energy < 0.001
         kill_agent!(smelt, model)
         return
     end
@@ -185,11 +182,16 @@ function sheepwolf_step!(smelt::Smelt, model)
     # smelt eating - see function below
     eat!(smelt, model)
 
-    # reproduction
-    if model.tick == 4
+    # reproduction every 5 ticks - just for testing
+    if mod(model.tick, 5) == 0
         #if rand(model.rng) ≤ smelt.reproduction_prob
         reproduce_smelt!(smelt, model)
         #end
+    end
+
+ # adults die based on probability - high for testing - will this kill all agents or is it run run for each agent?
+    if rand(model.rng) < smelt.mortality_random
+        kill_agent!(smelt, model)
     end
 end
 
@@ -222,32 +224,31 @@ function reproduce_smelt!(agent::A, model) where {A}
     # adding the agent  - should be added to pelagic
     add_agent_pos!(offspring, model)
 
-    # adults die based on probability - high for testing - will this kill all agents or is it run run for each agent?
-    if rand(model.rng) > 0.99
-        kill_agent!(smelt, model)
-    end
     return
 end
+
+
 # define model counter --------------------------------------------------------------------------------
 
-#= function grass_step!(model)
-    resource_grow!(model)
-    model.tick += 1
-end =#
+# grow resources - currently just add a fixed amount each timestep, and if we go over K, remove any excess
+# next step is to change to discrete time logistic growth
 
 # (1 = pelagic 0 = littoral)
 function grass_step!(model)
     for p in positions(model)
+
+        # first do pelagic resources
         if model.basal_resource_type[p...] == 1
-            model.basal_resource[p...] += model.cell_resource_growth_lit
-            
-            if model.basal_resource[p...] > model.cell_resource_k_lit
-                model.basal_resource[p...] = model.cell_resource_k_lit
-            end
-        else
             model.basal_resource[p...] += model.cell_resource_growth_pel
+            
             if model.basal_resource[p...] > model.cell_resource_k_pel
                 model.basal_resource[p...] = model.cell_resource_k_pel
+            end
+        # then littoral resources
+        else
+            model.basal_resource[p...] += model.cell_resource_growth_pel
+            if model.basal_resource[p...] > model.cell_resource_k_lit
+                model.basal_resource[p...] = model.cell_resource_k_lit
             end
         end
     end
@@ -288,7 +289,24 @@ plotkwargs...)
 fig
 
 
-# data collection 
+
+mod(0, 5) == 0
+
+
+# interactive plotting ------------------------------------------------------------------------------------
+#=sheepwolfgrass = initialize_model()
+
+# define sliders
+params = Dict(:n_smelt => 1:8)
+
+fig, ax, abmobs = abmplot(sheepwolfgrass;
+agent_step! = sheepwolf_step!,
+model_step! = grass_step!,
+    params, plotkwargs...)
+fig
+=#
+
+# data collection -------------------------------------------------------------------------------------
 
 sheepwolfgrass = initialize_model()
 steps = 10
