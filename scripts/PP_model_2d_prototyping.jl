@@ -5,6 +5,7 @@ using InteractiveDynamics
 using GLMakie
 using StatsBase
 
+
 # define agents -----------------------------------------------------------------------------
 # geneic traits of all fish
 @agent Smelt GridAgent{2} begin
@@ -30,13 +31,13 @@ end
 
 function initialize_model(;
     dims = (15, 15),                  # grid size
-    cell_resource_growth_lit = 5.0,    # cell resource growth rate - littoral resources - draw from distribution?
-    cell_resource_growth_pel = 7.0,    # cell resource growth rate - pelagic resources - draw from distribution?
+    cell_resource_growth_lit = 0.5,    # cell resource growth rate - littoral resources - draw from distribution?
+    cell_resource_growth_pel = 0.5,    # cell resource growth rate - pelagic resources - draw from distribution?
     cell_resource_k_lit = 100.0,        # cell resource carrying capacity - littoral - draw from distribution?
     cell_resource_k_pel = 50.0,        # cell resource carrying capacity - littoral - draw from distribution?
-    n_smelt = 3,                      # initial number of smelt
-    Δenergy_smelt = 5.0,              # energy gained from eating 1 unit resource - draw from distribution?
-    consume_amount_smelt = 10.0,       # max amount consumed in 1 timestep - draw from distribution?
+    n_smelt = 1,                      # initial number of smelt
+    Δenergy_smelt = 5.0,              # energy gained from eating resource - draw from distribution?
+    consume_amount_smelt = 5.0,       # max amount consumed in 1 timestep - draw from distribution?
     breed_prob_smelt = 0.0,           # probability of spawning (during seasonal window only) - draw from distribution?
     breed_mortality_smelt = 0.5,      # probability of dying after spawning - draw from distribution?
     growth_rate_smelt = 1.0,          # mm growth / time step - draw from distribution?
@@ -68,8 +69,6 @@ m1[:, 1:1 + m1_add] .= 1
 
 # Model properties
 properties = Dict(
-    :fully_grown => falses(dims),
-    :countdown => zeros(Int, dims),
     :basal_resource => zeros(Float64, dims),
     :basal_resource_type => m1,
     :cell_resource_growth_lit => cell_resource_growth_lit::Float64,
@@ -109,10 +108,7 @@ end
 
 # Add basal resource at random initial levels
 for p in positions(model)
-    fully_grown = rand(model.rng, Bool)
-    countdown = fully_grown ? cell_resource_growth_pel : rand(model.rng, 1:cell_resource_growth_pel) - 1
-    model.countdown[p...] = countdown
-    model.fully_grown[p...] = fully_grown
+    #model.basal_resource[p...] = 0.0
     model.basal_resource[p...] = rand(model.rng, 5:cell_resource_k_pel) - 1
 end
 return model
@@ -121,7 +117,6 @@ end
 # define agent movement --------------------------------------------------------------------------
 function sheepwolf_step!(smelt::Smelt, model)
 
-# ISSUE - currently agents stop moving after ~20 ticks ... because surrounded with no resource?
 
     # check if current pos has resources, - will need to update to check if predator is present 
     
@@ -156,8 +151,8 @@ function sheepwolf_step!(smelt::Smelt, model)
             lit_p = 1.0 - pel_p
 
             # convert pel/lit indicies to weights
-            ind1[ind1 .== 1.0] .= pel_p
-            ind1[ind1 .== 0] .= lit_p
+            ind1[ind1 .== 0.0] .= pel_p
+            ind1[ind1 .== 1.0] .= lit_p
 
             # randomly choose one of the nearby cells with resources
             m_to = sample(grassy_cells, Weights(ind1))
@@ -166,15 +161,19 @@ function sheepwolf_step!(smelt::Smelt, model)
             # move
             move_agent!(smelt, m_to, model)
         else
-            # if none of the near cells have resources, just pick one at random
-            near_cells = nearby_positions(smelt.pos, model, 1)
-            walk!(smelt, sample(near_cells.itr.iter, 1)[1], model)
+            # if none of the near cells have resources, just pick one at random - NO LITTORAL/PELAGIC PREFERENCE
+            #near_cells = nearby_positions(smelt.pos, model, smelt.vision_range)
+            #walk!(smelt, sample(near_cells.itr.iter, 1)[1], model)
+            m_to = sample(collect(near_cells))
+            move_agent!(smelt, m_to, model)
         end
     end 
 
-    # each time step smelt loose 0.5 unit of energy, if 0 die
-    smelt.energy -= 0.5
-    if smelt.energy < 0.001
+    # smelt loose energy after each step
+    smelt.energy -= 4.0
+
+    #  if < 0.5 die
+    if smelt.energy < 0.5
         kill_agent!(smelt, model)
         return
     end
@@ -190,9 +189,15 @@ function sheepwolf_step!(smelt::Smelt, model)
     end
 
  # adults die based on probability - high for testing - will this kill all agents or is it run run for each agent?
-    if rand(model.rng) < smelt.mortality_random
-        kill_agent!(smelt, model)
-    end
+   # if rand(model.rng) < smelt.mortality_random
+   #     kill_agent!(smelt, model)
+   # end
+
+   # if smelt.length > 50.0
+   #     kill_agent!(smelt, model)
+   # end
+
+
 end
 
 
@@ -214,7 +219,7 @@ function reproduce_smelt!(agent::A, model) where {A}
     id = nextid(model)
     length = 12
     energy = 10.0
-    Δenergy = agent.Δenergy/2
+    Δenergy = agent.Δenergy
     stage = 0
     offspring = A(id, agent.pos, energy, Δenergy, agent.reproduction, agent.consume_amount, length,
     agent.vision_range, agent.mortality_random, agent.mortality_reproduction, agent.resource_pref_adult,
@@ -263,12 +268,12 @@ set(a) = a isa Smelt ? (-0.1, -0.1*rand()) : (+0.1, +0.1*rand())
 ashape(a) = a isa Smelt ? :circle : :utriangle
 acolor(a) = a isa Smelt ? RGBf(rand(3)...) : RGBAf(0.2, 0.2, 0.3, 0.8)
 
-grasscolor(model) = model.basal_resource_type
-
-heatkwargs = (colormap = [:green, :brown], colorrange = (0, 1))
+grasscolor(model) = model.basal_resource
+heatkwargs = (colormap = [:green, :brown], colorrange = (0, 50))
 
 plotkwargs = (;
-    ac = acolor,
+    #ac = acolor,
+    ac = :red,
     as = 25,
     am = ashape,
     offset,
@@ -287,10 +292,6 @@ fig, ax, abmobs = abmplot(sheepwolfgrass;
     model_step! = grass_step!,
 plotkwargs...)
 fig
-
-
-
-mod(0, 5) == 0
 
 
 # interactive plotting ------------------------------------------------------------------------------------
