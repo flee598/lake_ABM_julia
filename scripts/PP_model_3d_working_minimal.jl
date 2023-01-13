@@ -37,20 +37,19 @@ heightmap = floor.(Int, convert.(Float64, lake_mtx))
 heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
 
 # try removing lake walls so we can see what is going on
-#heightmap2 = replace(heightmap2, 10155 => 0)
+heightmap2 = replace(heightmap2, 10155 => 0)
 
-mx_dpth = abs(minimum(heightmap2)) + 10
-#mx_dpth = 200
+#mx_dpth = abs(minimum(heightmap2)) + 10
+mx_dpth = 200
 
 # set limits between which agents can exist (surface and lake bed)
 mountain_level = mx_dpth - 10
-#lake_floor = 1
+lake_floor = 1
 
 dims = (size(heightmap2)..., mx_dpth)
 
 
 rng = MersenneTwister(seed)
-# space = GridSpace(dims, periodic = false)
 
 # Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
 # might only be for continuous spaces
@@ -63,8 +62,8 @@ air_walkmap = BitArray(falses(dims...))
  # air animals can fly at any height upto mountain_level
 
 for i in 1:dims[1], j in 1:dims[2]
-    if heightmap2[i, j] < mountain_level
-    #if lake_floor < heightmap2[i, j] < mountain_level
+    #if heightmap2[i, j] < mountain_level
+    if lake_floor < heightmap2[i, j] < mountain_level
         air_walkmap[i, j, (heightmap2[i, j]+1):mountain_level] .= true
     end
 end
@@ -187,7 +186,7 @@ fig
 
 # rd video with bathymetry surface added ---------------------------------------------
 function static_preplot!(ax, model)
-    surface(
+    surface!(
         ax,
         #(100/205):(100/205):100,
         #(100/205):(100/205):100,
@@ -213,8 +212,29 @@ abmvideo(
 
 
 
+# Try plotting in 2D
+using CairoMakie
 
 
+grasscolor(model) = model.heightmap2
+heatkwargs = (colormap = [:brown, :green], colorrange = (0, 1))
+
+
+plotkwargs = (;
+    ac = :red,
+    as = 1,
+    am = :circle,
+    offset,
+    scatterkwargs = (strokewidth = 1.0, strokecolor = :black),
+    heatarray = grasscolor,
+    heatkwargs = heatkwargs,
+)
+
+fig, ax, abmobs = abmplot(sheepwolfgrass;
+    agent_step! = sheepwolf_step!,
+    model_step! = grass_step!,
+plotkwargs...)
+fig
 
 
 
