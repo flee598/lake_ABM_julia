@@ -1,19 +1,28 @@
+#=
+3D model of a lake food web.
+
+Overview:
+1: generate a 3D lake environemnt from bathymetry data (currently csv)
+2: populate lake with fish - fish have a variety of traits (e.g. length)
+3: define lake cell traits (e.g. resource type and level)
+4: define fish movement (random in 3D, but weighted to move towards resources)
+5: define lake resource step (e.g. resource growth)
+6: repeat for n model steps
+=#
+
+# load packages ---------------------------------------------------------------------
 using Agents, Agents.Pathfinding
-#using Agents
 using Random
-using InteractiveDynamics
-using GLMakie
-using FileIO: load
 using StatsBase
+using CSV                   # importing bathymetry from csv
+using DataFrames            # importing bathymetry from csv
+using InteractiveDynamics   # interactive plots
+using GLMakie               # interactive plots
+# using FileIO: load    # used to download example heightmap
 
-# load csv of lake bathymetry ------------------------------------------------------
-using CSV
-using DataFrames
-
-
-@agent Sheep GridAgent{3} begin
+# define agents
+@agent Fish GridAgent{3} begin
 end
-
 
 # initialize model ------------------------------------------------------------------------
 function initialize_model(;
@@ -21,34 +30,41 @@ function initialize_model(;
     #"https://raw.githubusercontent.com/JuliaDynamics/" *
     #"JuliaDynamics/master/videos/agents/rabbit_fox_hawk_heightmap.png", 
     lake_url = "data\\taupo_500m.csv",
-    n_sheep = 10,
-    #mountain_level = 200,
-   # dims = (20, 20, 20),
+    n_fish = 10,
+    #lake_surface_level = 200,
     seed = 23182,
 )
 
 # example topology
 #heightmap = floor.(Int, convert.(Float64, load(download(heightmap_url))) * 39) .+ 1
 
-# lake topology
+# load lake topology
 lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
+
+# convert to integer
 heightmap = floor.(Int, convert.(Float64, lake_mtx))
 
+# rescale so that there aren't negative depth values (the depest point in the lake = 1)
 heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
 
-# try removing lake walls so we can see what is going on
+# try removing lake walls so we can see what is going on in the videos - doesn't work as the littoral zone is much shallower
+# than the pelagic so it obscures the view
 heightmap2 = replace(heightmap2, 10155 => 0)
 
-#mx_dpth = abs(minimum(heightmap2)) + 10
+# lake depth + a bit of buffer - AUTOMATE
 mx_dpth = 200
+#mx_dpth = abs(minimum(heightmap2)) + 10
+
 
 # set limits between which agents can exist (surface and lake bed)
-mountain_level = mx_dpth - 10
+# currently agents can get out of the water a bit!
+lake_surface_level = mx_dpth - 10
 lake_floor = 1
 
+# lake dimensions
 dims = (size(heightmap2)..., mx_dpth)
 
-
+# rng
 rng = MersenneTwister(seed)
 
 # Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
@@ -56,48 +72,39 @@ rng = MersenneTwister(seed)
 #space = GridSpace((100, 100, 50), periodic = false)
 space = GridSpace(dims, periodic = false)
 
+# 
+swim_walkmap = BitArray(falses(dims...))
 
-air_walkmap = BitArray(falses(dims...))
-
- # air animals can fly at any height upto mountain_level
-
+ # fish can swim at any between the lake bed and lake suface
 for i in 1:dims[1], j in 1:dims[2]
-    #if heightmap2[i, j] < mountain_level
-    if lake_floor < heightmap2[i, j] < mountain_level
-        air_walkmap[i, j, (heightmap2[i, j]+1):mountain_level] .= true
+    if lake_floor < heightmap2[i, j] < lake_surface_level
+        swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
     end
 end
 
 # model properties
 properties = (
-    air_walkmap = air_walkmap,
-    airfinder = AStar(space; walkmap = air_walkmap, diagonal_movement = true),
+    swim_walkmap = swim_walkmap,
+    waterfinder = AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
     heightmap2 = heightmap2,
     fully_grown = falses(dims),
 )
 
-model = ABM(Sheep, space; properties, rng, scheduler = Schedulers.randomly, warn = false
+model = ABM(Fish, space; properties, rng, scheduler = Schedulers.randomly, warn = false
 )
 
 # Add agents
-for _ in 1:n_sheep
+for _ in 1:n_fish
     add_agent_pos!(
-        Sheep(
+        Fish(
             nextid(model), 
-            random_walkable(model, model.airfinder),
+            random_walkable(model, model.waterfinder),
         ),
         model,
     )
 end
 
-
- # params here must be in the same order as the @agent section above
- #for _ in 1:n_sheep
- #    add_agent!(Sheep, model)
- #end
-
-
-# Add grass with random initial growth
+# here is where I add cell "traits" such as resource level
 for p in positions(model)
     fully_grown = rand(model.rng, Bool)
     model.fully_grown[p...] = fully_grown
@@ -107,64 +114,41 @@ return model
 
 end
 
-# sheep movement - random ----------------------------------------------------
-function sheepwolf_step!(sheep::Sheep, model)
+# fish movement - random ----------------------------------------------------
+function fish_step!(fish::Fish, model)
     
-    #walk!(sheep, rand, model)
-
-    # plan where to move based on allowable space (must stay in lake)
-    # 1 = vision range
-
-    #=
-    plan_route!(
-                sheep,
-                nearby_walkable(sheep.pos, model, model.airfinder, 1),
-                model.airfinder
-    )
-
-    move_along_route!(sheep, model, model.airfinder)
- 
- =#
 # 1 = vison range
- near_cells = nearby_positions(sheep.pos, model, 1)
+ near_cells = nearby_positions(fish.pos, model, 1)
 
 # storage
  grassy_cells = []
  
- 
  # find which of the nearby cells are allowed to be moved onto
  for cell in near_cells
-     if model.air_walkmap[cell...] > 0
+     if model.swim_walkmap[cell...] > 0
          push!(grassy_cells, cell)
      end
  end
-
 
  if length(grassy_cells) > 0
     # sample 1 cell
     m_to = sample(grassy_cells)
     # move
-    move_agent!(sheep, m_to, model)
+    move_agent!(fish, m_to, model)
  end
-
-
-
 end
 
 
-# resource - something mundane -----------------------------------------------------------
-function grass_step!(model)
+# resource step - something mundane - TO BE UPDATED -------------------------------------
+function lake_resource_step!(model)
     for p in positions(model)
                 model.fully_grown[p...] = true
             end
 end
 
 
-# set up model - fails -------------------------------------------------------------------
-sheepwolfgrass = initialize_model() 
-
-
-
+# set up model -----------------------------------------------------------------------------
+model_initilised = initialize_model() 
 
 
 # plotting params -------------------------------------------------------------------------
@@ -176,15 +160,15 @@ plotkwargs = (;
 )
 
 # interactive plot ------------------------------------------------------------------------
-fig, ax, abmobs = abmplot(sheepwolfgrass;
-    agent_step! = sheepwolf_step!,
-    model_step! = grass_step!,
+fig, ax, abmobs = abmplot(model_initilised;
+    agent_step! = fish_step!,
+    model_step! = lake_resource_step!,
 plotkwargs...)
 fig
 
 
 
-# rd video with bathymetry surface added ---------------------------------------------
+# 3d video with bathymetry surface added ---------------------------------------------
 function static_preplot!(ax, model)
     surface!(
         ax,
@@ -195,16 +179,14 @@ function static_preplot!(ax, model)
     )
 end
 
-
-
-animalcolor(a) = :red
+#animalcolor(a) = :red
 
 abmvideo(
     "rabbit_fox_hawk.mp4",
-    sheepwolfgrass, sheepwolf_step!, grass_step!;
+    model_initilised, fish_step!, lake_resource_step!;
     figure = (resolution = (1920 , 1080),),
     frames = 40,
-    ac = animalcolor,
+    ac = :red,
     as = 1,
     static_preplot!,
     title = "Rabbit Fox Hawk with pathfinding"
@@ -212,29 +194,6 @@ abmvideo(
 
 
 
-# Try plotting in 2D
-using CairoMakie
-
-
-grasscolor(model) = model.heightmap2
-heatkwargs = (colormap = [:brown, :green], colorrange = (0, 1))
-
-
-plotkwargs = (;
-    ac = :red,
-    as = 1,
-    am = :circle,
-    offset,
-    scatterkwargs = (strokewidth = 1.0, strokecolor = :black),
-    heatarray = grasscolor,
-    heatkwargs = heatkwargs,
-)
-
-fig, ax, abmobs = abmplot(sheepwolfgrass;
-    agent_step! = sheepwolf_step!,
-    model_step! = grass_step!,
-plotkwargs...)
-fig
 
 
 
@@ -242,13 +201,8 @@ fig
 
 
 
-
-
-
-
-
-
-
+# testing bits of code -----------------------------------------------------------------
+#=
 heightmap_url =
     "https://raw.githubusercontent.com/JuliaDynamics/" *
     "JuliaDynamics/master/videos/agents/rabbit_fox_hawk_heightmap.png" 
@@ -256,22 +210,22 @@ heightmap_url =
 heightmap = floor.(Int, convert.(Float64, load(download(heightmap_url))) * 39) .+ 1
 dims = (size(heightmap)..., 50)
 
-air_walkmap = BitArray(falses(dims...))
+swim_walkmap = BitArray(falses(dims...))
 
-mountain_level = 35
+lake_surface_level = 35
 
 for i in 1:dims[1], j in 1:dims[2]
-    if heightmap[i, j] < mountain_level
-        air_walkmap[i, j, (heightmap[i, j]+1):mountain_level] .= true
+    if heightmap[i, j] < lake_surface_level
+        swim_walkmap[i, j, (heightmap[i, j]+1):lake_surface_level] .= true
     end
 end
 
 
 heightmap
-air_walkmap[:, :, 20]
+swim_walkmap[:, :, 20]
 
 
-near_cells = nearby_positions((1,1,2), sheepwolfgrass, 1)
+near_cells = nearby_positions((1,1,2), model_initilised, 1)
 near_cells
 
 
@@ -280,7 +234,7 @@ grassy_cells = []
  
 # find which of the nearby cells are allowed to be moved onto
 for cell in near_cells
-    if sheepwolfgrass.air_walkmap[cell...] > 0
+    if model_initilised.swim_walkmap[cell...] > 0
         push!(grassy_cells, cell)
     end
 end
@@ -293,15 +247,15 @@ if length(grassy_cells) > 0
    # sample 1 cell
    m_to = sample(grassy_cells)
    # move
-   move_agent!(sheep, m_to, model)
+   move_agent!(fish, m_to, model)
 end
 
 m_to = sample(collect(near_cells))
 
 space = GridSpace((100, 100, 50), periodic = false)
-airfinder = AStar(space; diagonal_movement = true)
+waterfinder = AStar(space; diagonal_movement = true)
 
-random_walkable(sheepwolfgrass, airfinder)
+random_walkable(model_initilised, waterfinder)
 
 
 
@@ -314,12 +268,6 @@ df = CSV.read("data\\taupo_500m.csv", DataFrame) |> Tables.matrix
 
 # convert to Int
 floor.(Int, convert.(Float64, df))
-
-
-
-
-
-
 
 
 
@@ -349,17 +297,19 @@ rng = MersenneTwister(1234)
 space = GridSpace(dims, periodic = false)
 
 
-air_walkmap = BitArray(falses(dims...))
+swim_walkmap = BitArray(falses(dims...))
 
- # air animals can fly at any height upto mountain_level
+ # air animals can fly at any height upto lake_surface_level
 
 for i in 1:dims[1], j in 1:dims[2]
-    if heightmap2[i, j] < mountain_level
-        air_walkmap[i, j, (heightmap2[i, j]+1):mountain_level] .= true
+    if heightmap2[i, j] < lake_surface_level
+        swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
     end
 end
 
 
 
-# define where "sheep" can walk - everywhere
+# define where "fish" can walk - everywhere
 # land_walkmap = BitArray(trues(dims...))
+
+=#
