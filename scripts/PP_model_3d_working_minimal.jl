@@ -18,7 +18,7 @@ using CSV                   # importing bathymetry from csv
 using DataFrames            # importing bathymetry from csv
 using InteractiveDynamics   # interactive plots
 using GLMakie               # interactive plots
-# using FileIO: load    # used to download example heightmap
+# using FileIO: load        # used to download example heightmap
 
 # define agents
 @agent Fish GridAgent{3} begin
@@ -32,13 +32,14 @@ function initialize_model(;
     lake_url = "data\\taupo_500m.csv",
     n_fish = 10,
     #lake_surface_level = 200,
+    max_littoral_depth = 20,    # how far down does the littoral go in meters
     seed = 23182,
 )
 
 # example topology
 #heightmap = floor.(Int, convert.(Float64, load(download(heightmap_url))) * 39) .+ 1
 
-# load lake topology
+# load lake topology ----------------------------------------------------------
 lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
 
 # convert to integer
@@ -56,16 +57,24 @@ mx_dpth = 200
 #mx_dpth = abs(minimum(heightmap2)) + 10
 
 
-# set limits between which agents can exist (surface and lake bed)
+# create new lake_type variable -----------------------------------------------
+lake_type .= heightmap
+
+# if take_type is between 0 and max_littoral_depth cell is littoral
+lake_type[lake_type .< 1 .&& lake_type .> -(max_littoral_depth + 1)] .= 1
+
+# if lake is deeper than max_littoral_depth cell is pelagic
+lake_type[lake_type .< -max_littoral_depth] .= 0
+
+
+# set limits between which agents can exist (surface and lake bed) ----------------
 # currently agents can get out of the water a bit!
 lake_surface_level = mx_dpth - 10
 lake_floor = 1
 
-# lake dimensions
+# lake dimensions ---------------------------------------------------------
 dims = (size(heightmap2)..., mx_dpth)
 
-# rng
-rng = MersenneTwister(seed)
 
 # Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
 # might only be for continuous spaces
@@ -87,8 +96,14 @@ properties = (
     swim_walkmap = swim_walkmap,
     waterfinder = AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
     heightmap2 = heightmap2,
+    lake_type = lake_type,
     fully_grown = falses(dims),
 )
+
+
+# rng
+rng = MersenneTwister(seed)
+
 
 model = ABM(Fish, space; properties, rng, scheduler = Schedulers.randomly, warn = false
 )
@@ -193,6 +208,30 @@ abmvideo(
 )
 
 
+
+
+
+
+
+typeof(NaN)
+
+x = [1, missing]
+x
+
+typeof(x)
+
+lake_url = "data\\taupo_500m.csv"
+
+
+
+# load lake topology
+lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
+
+# convert to integer
+heightmap = floor.(Int, convert.(Float64, lake_mtx))
+
+
+# create a littoral/pelagic layer
 
 
 
