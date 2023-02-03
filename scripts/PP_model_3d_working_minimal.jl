@@ -10,6 +10,15 @@ Overview:
 6: repeat for n model steps
 =#
 
+#= 
+To do
+add multiple agents
+add resources
+add agent behaviour 
+
+=#
+
+
 # load packages ---------------------------------------------------------------------
 using Agents, Agents.Pathfinding
 using Random
@@ -24,6 +33,7 @@ using GLMakie               # interactive plots
 @agent Fish GridAgent{3} begin
 end
 
+#=
 # initialize model ------------------------------------------------------------------------
 function initialize_model(;
     #heightmap_url =
@@ -35,9 +45,20 @@ function initialize_model(;
     max_littoral_depth = 20,    # how far down does the littoral go in meters
     seed = 23182,
 )
+=#
+
+
+
+# try removing lake walls so we can see what is going on in the videos - doesn't work as the littoral zone is much shallower
+# than the pelagic so it obscures the view
+# heightmap2 = replace(heightmap2, 10155 => 0)
+
+
 
 # example topology
 #heightmap = floor.(Int, convert.(Float64, load(download(heightmap_url))) * 39) .+ 1
+
+lake_url = "data\\taupo_500m.csv"
 
 # load lake topology ----------------------------------------------------------
 lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
@@ -45,36 +66,49 @@ lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
 # convert to integer
 heightmap = floor.(Int, convert.(Float64, lake_mtx))
 
-# rescale so that there aren't negative depth values (the depest point in the lake = 1)
+
+# rescale so that there aren't negative depth values (the deepest point in the lake = 1)
 heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
+heightmap2 .= heightmap .*-1
+
 
 # try removing lake walls so we can see what is going on in the videos - doesn't work as the littoral zone is much shallower
 # than the pelagic so it obscures the view
-heightmap2 = replace(heightmap2, 10155 => 0)
+#heightmap2 = replace(heightmap2, -9999 => 0)
 
-# lake depth + a bit of buffer - AUTOMATE
-mx_dpth = 200
-#mx_dpth = abs(minimum(heightmap2)) + 10
+# lake depth 
+mx_dpth = maximum(heightmap2)
 
 
 # create new lake_type variable -----------------------------------------------
-lake_type .= heightmap
+lake_type .= heightmap2
 
-# if take_type is between 0 and max_littoral_depth cell is littoral
-lake_type[lake_type .< 1 .&& lake_type .> -(max_littoral_depth + 1)] .= 1
+# define the maximum depth of the littoral zone - this could be automated epending on env conditions
+max_littoral_depth = 50
+
+
+lake_type
+heightmap
+heightmap2
+
+# if take_type (depth) is between 0 and max_littoral_depth cell is littoral
+lake_type[lake_type .> 0 .&& lake_type .< max_littoral_depth] .= 1
 
 # if lake is deeper than max_littoral_depth cell is pelagic
-lake_type[lake_type .< -max_littoral_depth] .= 0
-
+lake_type[lake_type .> max_littoral_depth] .= 0
 
 # set limits between which agents can exist (surface and lake bed) ----------------
 # currently agents can get out of the water a bit!
-lake_surface_level = mx_dpth - 10
+lake_surface_level = mx_dpth
 lake_floor = 1
+
+unique
+
 
 # lake dimensions ---------------------------------------------------------
 dims = (size(heightmap2)..., mx_dpth)
 
+heightmap2
 
 # Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
 # might only be for continuous spaces
@@ -83,6 +117,7 @@ space = GridSpace(dims, periodic = false)
 
 # 
 swim_walkmap = BitArray(falses(dims...))
+
 
  # fish can swim at any between the lake bed and lake suface
 for i in 1:dims[1], j in 1:dims[2]
@@ -127,7 +162,7 @@ end
 
 return model
 
-end
+# end
 
 # fish movement - random ----------------------------------------------------
 function fish_step!(fish::Fish, model)
@@ -213,13 +248,6 @@ abmvideo(
 
 
 
-typeof(NaN)
-
-x = [1, missing]
-x
-
-typeof(x)
-
 lake_url = "data\\taupo_500m.csv"
 
 
@@ -296,7 +324,7 @@ waterfinder = AStar(space; diagonal_movement = true)
 
 random_walkable(model_initilised, waterfinder)
 
-
+=#
 
 # load csv of lake bathymetry ------------------------------------------------------
 using CSV
@@ -315,15 +343,15 @@ lake_url = "data\\taupo_500m.csv"
 # lake topology
 lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
 heightmap = floor.(Int, convert.(Float64, lake_mtx))
-
+heightmap
 heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
 heightmap2
 dims = (size(heightmap2)..., 50)
 
 heightmap2
-heightmap2[heightmap2.=10155] .= 0
 
-replace(heightmap2, 10155 => 0)
+# 
+replace!(heightmap2, 10155 => 0)
 
 
 
@@ -351,4 +379,42 @@ end
 # define where "fish" can walk - everywhere
 # land_walkmap = BitArray(trues(dims...))
 
-=#
+
+
+# load lake topology ----------------------------------------------------------
+lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
+
+# convert to integer
+heightmap = floor.(Int, convert.(Float64, lake_mtx))
+heightmap
+
+# rescale so that there aren't negative depth values (the deepest point in the lake = 1)
+heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
+heightmap2 .= heightmap .*-1
+
+# try removing lake walls so we can see what is going on in the videos - doesn't work as the littoral zone is much shallower
+# than the pelagic so it obscures the view
+# heightmap2 = replace(heightmap2, 10155 => 0)
+
+# lake depth
+mx_dpth = maximum(heightmap2)
+
+# create new lake_type variable -----------------------------------------------
+lake_type = heightmap2
+
+max_littoral_depth = 50
+
+# if take_type (depth) is between 0 and max_littoral_depth cell is littoral
+lake_type[lake_type .> 0 .&& lake_type .< max_littoral_depth] .= 1
+
+
+# if lake is deeper than max_littoral_depth cell is pelagic
+lake_type[lake_type .> max_littoral_depth] .= 0
+
+# set limits between which agents can exist (surface and lake bed) ----------------
+# currently agents can get out of the water a bit!
+lake_surface_level = mx_dpth
+lake_floor = 1
+
+# lake dimensions ---------------------------------------------------------
+dims = (size(heightmap2)..., mx_dpth)
