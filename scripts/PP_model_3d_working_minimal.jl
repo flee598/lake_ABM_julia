@@ -33,7 +33,6 @@ using GLMakie               # interactive plots
 @agent Fish GridAgent{3} begin
 end
 
-#=
 # initialize model ------------------------------------------------------------------------
 function initialize_model(;
     #heightmap_url =
@@ -41,12 +40,9 @@ function initialize_model(;
     #"JuliaDynamics/master/videos/agents/rabbit_fox_hawk_heightmap.png", 
     lake_url = "data\\taupo_500m.csv",
     n_fish = 10,
-    #lake_surface_level = 200,
-    max_littoral_depth = 20,    # how far down does the littoral go in meters
-    seed = 23182,
+    max_littoral_depth = 50,    # how far down does the littoral go in meters
+    seed = 12345,
 )
-=#
-
 
 
 # try removing lake walls so we can see what is going on in the videos - doesn't work as the littoral zone is much shallower
@@ -58,7 +54,7 @@ function initialize_model(;
 # example topology
 #heightmap = floor.(Int, convert.(Float64, load(download(heightmap_url))) * 39) .+ 1
 
-lake_url = "data\\taupo_500m.csv"
+# lake_url = "data\\taupo_500m.csv"
 
 # load lake topology ----------------------------------------------------------
 lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
@@ -79,20 +75,18 @@ heightmap2 .= heightmap .*-1
 # lake depth 
 mx_dpth = maximum(heightmap2)
 
-
 # create new lake_type variable -----------------------------------------------
+# 1 = littoral, 0 = pelagic
+lake_type = ones(Int, size(heightmap2))
 lake_type .= heightmap2
 
+
+
 # define the maximum depth of the littoral zone - this could be automated epending on env conditions
-max_littoral_depth = 50
 
-
-lake_type
-heightmap
-heightmap2
 
 # if take_type (depth) is between 0 and max_littoral_depth cell is littoral
-lake_type[lake_type .> 0 .&& lake_type .< max_littoral_depth] .= 1
+lake_type[lake_type .> 0 .&& lake_type .< (max_littoral_depth + 1)] .= 1
 
 # if lake is deeper than max_littoral_depth cell is pelagic
 lake_type[lake_type .> max_littoral_depth] .= 0
@@ -102,22 +96,18 @@ lake_type[lake_type .> max_littoral_depth] .= 0
 lake_surface_level = mx_dpth
 lake_floor = 1
 
-unique
-
 
 # lake dimensions ---------------------------------------------------------
 dims = (size(heightmap2)..., mx_dpth)
 
-heightmap2
 
 # Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
 # might only be for continuous spaces
 #space = GridSpace((100, 100, 50), periodic = false)
 space = GridSpace(dims, periodic = false)
 
-# 
+#  swimable space
 swim_walkmap = BitArray(falses(dims...))
-
 
  # fish can swim at any between the lake bed and lake suface
 for i in 1:dims[1], j in 1:dims[2]
@@ -126,19 +116,23 @@ for i in 1:dims[1], j in 1:dims[2]
     end
 end
 
+
+# create lake basal resource array
+lake_basal_resource = zeros(size(heightmap2))
+
+
 # model properties
 properties = (
     swim_walkmap = swim_walkmap,
     waterfinder = AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
     heightmap2 = heightmap2,
     lake_type = lake_type,
+    lake_basal_resource = lake_basal_resource,
     fully_grown = falses(dims),
 )
 
-
 # rng
 rng = MersenneTwister(seed)
-
 
 model = ABM(Fish, space; properties, rng, scheduler = Schedulers.randomly, warn = false
 )
@@ -162,44 +156,42 @@ end
 
 return model
 
-# end
+end
 
 # fish movement - random ----------------------------------------------------
 function fish_step!(fish::Fish, model)
     
-# 1 = vison range
- near_cells = nearby_positions(fish.pos, model, 1)
-
-# storage
- grassy_cells = []
- 
- # find which of the nearby cells are allowed to be moved onto
- for cell in near_cells
-     if model.swim_walkmap[cell...] > 0
-         push!(grassy_cells, cell)
-     end
- end
-
- if length(grassy_cells) > 0
-    # sample 1 cell
-    m_to = sample(grassy_cells)
-    # move
-    move_agent!(fish, m_to, model)
- end
+    # 1 = vison range
+    near_cells = nearby_positions(fish.pos, model, 1)
+    
+    # storage
+    grassy_cells = []
+    
+    # find which of the nearby cells are allowed to be moved onto
+    for cell in near_cells
+        if model.swim_walkmap[cell...] > 0
+            push!(grassy_cells, cell)
+        end
+    end
+    
+    if length(grassy_cells) > 0
+        # sample 1 cell
+        m_to = sample(grassy_cells)
+        # move
+        move_agent!(fish, m_to, model)
+    end
 end
-
 
 # resource step - something mundane - TO BE UPDATED -------------------------------------
 function lake_resource_step!(model)
     for p in positions(model)
-                model.fully_grown[p...] = true
-            end
+        model.fully_grown[p...] = true
+    end
 end
 
 
 # set up model -----------------------------------------------------------------------------
 model_initilised = initialize_model() 
-
 
 # plotting params -------------------------------------------------------------------------
 plotkwargs = (;
@@ -208,6 +200,7 @@ plotkwargs = (;
     am = :circle,
     scatterkwargs = (strokewidth = 1.0, strokecolor = :black),
 )
+
 
 # interactive plot ------------------------------------------------------------------------
 fig, ax, abmobs = abmplot(model_initilised;
@@ -246,175 +239,23 @@ abmvideo(
 
 
 
+lake_basal_resource = zeros(dims)
 
 
-lake_url = "data\\taupo_500m.csv"
+lake_basal_resource[]
+lake_type
 
 
+dims
 
-# load lake topology
-lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
-
-# convert to integer
-heightmap = floor.(Int, convert.(Float64, lake_mtx))
-
-
-# create a littoral/pelagic layer
-
-
-
-
-
-
-
-
-# testing bits of code -----------------------------------------------------------------
-#=
-heightmap_url =
-    "https://raw.githubusercontent.com/JuliaDynamics/" *
-    "JuliaDynamics/master/videos/agents/rabbit_fox_hawk_heightmap.png" 
-
-heightmap = floor.(Int, convert.(Float64, load(download(heightmap_url))) * 39) .+ 1
-dims = (size(heightmap)..., 50)
-
-swim_walkmap = BitArray(falses(dims...))
-
-lake_surface_level = 35
 
 for i in 1:dims[1], j in 1:dims[2]
-    if heightmap[i, j] < lake_surface_level
-        swim_walkmap[i, j, (heightmap[i, j]+1):lake_surface_level] .= true
-    end
-end
-
-
-heightmap
-swim_walkmap[:, :, 20]
-
-
-near_cells = nearby_positions((1,1,2), model_initilised, 1)
-near_cells
-
-
-# storage
-grassy_cells = []
- 
-# find which of the nearby cells are allowed to be moved onto
-for cell in near_cells
-    if model_initilised.swim_walkmap[cell...] > 0
-        push!(grassy_cells, cell)
-    end
-end
-
-grassy_cells
-sample(grassy_cells)
-
-
-if length(grassy_cells) > 0
-   # sample 1 cell
-   m_to = sample(grassy_cells)
-   # move
-   move_agent!(fish, m_to, model)
-end
-
-m_to = sample(collect(near_cells))
-
-space = GridSpace((100, 100, 50), periodic = false)
-waterfinder = AStar(space; diagonal_movement = true)
-
-random_walkable(model_initilised, waterfinder)
-
-=#
-
-# load csv of lake bathymetry ------------------------------------------------------
-using CSV
-using DataFrames
-
-
-df = CSV.read("data\\taupo_500m.csv", DataFrame) |> Tables.matrix
-
-# convert to Int
-floor.(Int, convert.(Float64, df))
-
-
-
-lake_url = "data\\taupo_500m.csv"
-
-# lake topology
-lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
-heightmap = floor.(Int, convert.(Float64, lake_mtx))
-heightmap
-heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
-heightmap2
-dims = (size(heightmap2)..., 50)
-
-heightmap2
-
-# 
-replace!(heightmap2, 10155 => 0)
-
-
-
-rng = MersenneTwister(1234)
-# space = GridSpace(dims, periodic = false)
-
-# Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
-# might only be for continuous spaces
-#space = GridSpace((100, 100, 50), periodic = false)
-space = GridSpace(dims, periodic = false)
-
-
-swim_walkmap = BitArray(falses(dims...))
-
- # air animals can fly at any height upto lake_surface_level
-
-for i in 1:dims[1], j in 1:dims[2]
-    if heightmap2[i, j] < lake_surface_level
-        swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
+    if xx[i,j]
+        lake_basal_resource[i, j, 1:mx_dpth] .= 5.0
     end
 end
 
 
 
-# define where "fish" can walk - everywhere
-# land_walkmap = BitArray(trues(dims...))
 
-
-
-# load lake topology ----------------------------------------------------------
-lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
-
-# convert to integer
-heightmap = floor.(Int, convert.(Float64, lake_mtx))
-heightmap
-
-# rescale so that there aren't negative depth values (the deepest point in the lake = 1)
-heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
-heightmap2 .= heightmap .*-1
-
-# try removing lake walls so we can see what is going on in the videos - doesn't work as the littoral zone is much shallower
-# than the pelagic so it obscures the view
-# heightmap2 = replace(heightmap2, 10155 => 0)
-
-# lake depth
-mx_dpth = maximum(heightmap2)
-
-# create new lake_type variable -----------------------------------------------
-lake_type = heightmap2
-
-max_littoral_depth = 50
-
-# if take_type (depth) is between 0 and max_littoral_depth cell is littoral
-lake_type[lake_type .> 0 .&& lake_type .< max_littoral_depth] .= 1
-
-
-# if lake is deeper than max_littoral_depth cell is pelagic
-lake_type[lake_type .> max_littoral_depth] .= 0
-
-# set limits between which agents can exist (surface and lake bed) ----------------
-# currently agents can get out of the water a bit!
-lake_surface_level = mx_dpth
-lake_floor = 1
-
-# lake dimensions ---------------------------------------------------------
-dims = (size(heightmap2)..., mx_dpth)
+lake_basal_resource
