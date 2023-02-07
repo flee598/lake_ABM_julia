@@ -31,7 +31,18 @@ using GLMakie               # interactive plots
 
 # define agents
 @agent Fish GridAgent{3} begin
+    type::Symbol
+    length::Float64
 end
+
+# agent traits that are fixed constants  - I think... 
+
+# agent types
+Trout(id, pos, length) = Fish(id, pos, :trout, length)
+Koaro(id, pos, length) = Fish(id, pos, :koaro, length)
+Smelt(id, pos, length) = Fish(id, pos, :hawk, length)
+
+
 
 # initialize model ------------------------------------------------------------------------
 function initialize_model(;
@@ -39,7 +50,9 @@ function initialize_model(;
     #"https://raw.githubusercontent.com/JuliaDynamics/" *
     #"JuliaDynamics/master/videos/agents/rabbit_fox_hawk_heightmap.png", 
     lake_url = "data\\taupo_500m.csv",
-    n_fish = 10,
+    n_trout = 3,
+    n_koaro = 5,
+    n_smelt = 7,
     max_littoral_depth = 50,    # how far down does the littoral go in meters
     seed = 12345,
 )
@@ -122,7 +135,7 @@ end
 # create lake basal resource array
 lake_basal_resource = zeros(dims)
 
-# populate 
+# populate with basal resource
 # this is a 3d array, where each matrix slice is x/y and the z dim is depth 
 for i in 1:dims[1], j in 1:dims[2]
     if lake_type[i,j] == 0    # pelagic basal resource amount
@@ -134,8 +147,7 @@ for i in 1:dims[1], j in 1:dims[2]
 end
 
 
-
-# model properties
+# model properties - see type stability issue in Agents.jl -> performance tips, might need to change this
 properties = (
     swim_walkmap = swim_walkmap,
     waterfinder = AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
@@ -151,16 +163,44 @@ rng = MersenneTwister(seed)
 
 model = ABM(Fish, space; properties, rng, scheduler = Schedulers.randomly, warn = false)
 
-# Add agents
-for _ in 1:n_fish
+# Add agents -----------------------
+
+# trout
+for _ in 1:n_trout
     add_agent_pos!(
-        Fish(
+        Trout(
             nextid(model), 
             random_walkable(model, model.waterfinder),
+            10.0,     # fish length
         ),
         model,
     )
 end
+
+# koaro
+for _ in 1:n_koaro
+    add_agent_pos!(
+        Koaro(
+            nextid(model), 
+            random_walkable(model, model.waterfinder),
+            10.0,     # fish length
+        ),
+        model,
+    )
+end
+
+# smelt
+for _ in 1:n_smelt
+    add_agent_pos!(
+        Smelt(
+            nextid(model), 
+            random_walkable(model, model.waterfinder),
+            10.0,     # fish length
+        ),
+        model,
+    )
+end
+
 
 # here is where I add cell "traits" such as resource level
 for p in positions(model)
@@ -172,11 +212,23 @@ return model
 
 end
 
-# fish movement - random ----------------------------------------------------
-function fish_step!(fish::Fish, model)
+# fish movement --------------------------------------------------------------
+function fish_step!(fish, model)
+    if fish.type == :trout
+        trout_step!(fish, model)
+    elseif fish.type == :koaro
+        koaro_step!(fish, model)
+    else
+        smelt_step!(fish, model)
+    end
+end
+
+
+# trout movement ------------------------------------------
+function trout_step!(trout, model)
     
     # 1 = vison range
-    near_cells = nearby_positions(fish.pos, model, 1)
+    near_cells = nearby_positions(trout.pos, model, 1)
     
     # storage
     grassy_cells = []
@@ -192,9 +244,57 @@ function fish_step!(fish::Fish, model)
         # sample 1 cell
         m_to = sample(grassy_cells)
         # move
-        move_agent!(fish, m_to, model)
+        move_agent!(trout, m_to, model)
     end
 end
+
+# koaro movement ------------------------------------------
+function koaro_step!(koaro, model)
+ # 1 = vison range
+ near_cells = nearby_positions(koaro.pos, model, 1)
+    
+ # storage
+ grassy_cells = []
+ 
+ # find which of the nearby cells are allowed to be moved onto
+ for cell in near_cells
+     if model.swim_walkmap[cell...] > 0
+         push!(grassy_cells, cell)
+     end
+ end
+ 
+ if length(grassy_cells) > 0
+     # sample 1 cell
+     m_to = sample(grassy_cells)
+     # move
+     move_agent!(koaro, m_to, model)
+ end
+end
+
+# smelt movement ------------------------------------------
+function smelt_step!(smelt, model)
+     # 1 = vison range
+     near_cells = nearby_positions(smelt.pos, model, 1)
+    
+     # storage
+     grassy_cells = []
+     
+     # find which of the nearby cells are allowed to be moved onto
+     for cell in near_cells
+         if model.swim_walkmap[cell...] > 0
+             push!(grassy_cells, cell)
+         end
+     end
+     
+     if length(grassy_cells) > 0
+         # sample 1 cell
+         m_to = sample(grassy_cells)
+         # move
+         move_agent!(smelt, m_to, model)
+     end
+end
+
+
 
 # resource step - something mundane - TO BE UPDATED -------------------------------------
 function lake_resource_step!(model)
@@ -203,29 +303,45 @@ function lake_resource_step!(model)
         model.fully_grown[p...] = true
     end
     
-    # subset basal resources
+    # subset basal resources -----------------
+
+    # pelagic
     pelagic_growable = view(
         model.lake_basal_resource,
         model.lake_type_3d .== 0 ,
     )
 
+    # littoral 
     littoral_growable = view(
         model.lake_basal_resource,
         model.lake_type_3d .== 1 ,
     )
     
-    # grow resources
+    # grow resources --------------------------
     pelagic_growable .=  pelagic_growable .* 2.0
     littoral_growable .=  littoral_growable .* 1.5
 end
+
+
 
 
 # set up model -----------------------------------------------------------------------------
 model_initilised = initialize_model() 
 
 # plotting params -------------------------------------------------------------------------
+
+animalcolor(a) =
+    if a.type == :trout
+        :brown
+    elseif a.type == :koaro
+        :orange
+    else
+        :blue
+    end
+
+
 plotkwargs = (;
-    ac = :red,
+    ac = animalcolor,
     as = 2,
     am = :circle,
     scatterkwargs = (strokewidth = 1.0, strokecolor = :black),
