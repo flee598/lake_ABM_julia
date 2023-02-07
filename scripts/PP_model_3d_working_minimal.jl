@@ -65,7 +65,7 @@ heightmap = floor.(Int, convert.(Float64, lake_mtx))
 
 # rescale so that there aren't negative depth values (the deepest point in the lake = 1)
 heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
-heightmap2 .= heightmap .*-1
+heightmap2 .= heightmap .* -1
 
 
 # try removing lake walls so we can see what is going on in the videos - doesn't work as the littoral zone is much shallower
@@ -81,15 +81,14 @@ lake_type = ones(Int, size(heightmap2))
 lake_type .= heightmap2
 
 
-
-# define the maximum depth of the littoral zone - this could be automated epending on env conditions
-
+# define the maximum depth of the littoral zone - this could be automated depending on env conditions
 
 # if take_type (depth) is between 0 and max_littoral_depth cell is littoral
-lake_type[lake_type .> 0 .&& lake_type .< (max_littoral_depth + 1)] .= 1
+lake_type[lake_type .> -1 .&& lake_type .< (max_littoral_depth + 1)] .= 1
 
 # if lake is deeper than max_littoral_depth cell is pelagic
 lake_type[lake_type .> max_littoral_depth] .= 0
+
 
 # set limits between which agents can exist (surface and lake bed) ----------------
 # currently agents can get out of the water a bit!
@@ -99,6 +98,9 @@ lake_floor = 1
 
 # lake dimensions ---------------------------------------------------------
 dims = (size(heightmap2)..., mx_dpth)
+
+# 3d version of lake type, used for indexing
+lake_type_3d = repeat(lake_type, 1,1,dims[3])
 
 
 # Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
@@ -118,7 +120,19 @@ end
 
 
 # create lake basal resource array
-lake_basal_resource = zeros(size(heightmap2))
+lake_basal_resource = zeros(dims)
+
+# populate 
+# this is a 3d array, where each matrix slice is x/y and the z dim is depth 
+for i in 1:dims[1], j in 1:dims[2]
+    if lake_type[i,j] == 0    # pelagic basal resource amount
+        lake_basal_resource[i, j, 1:mx_dpth] .= 5.0
+    end
+    if lake_type[i,j] == 1 # littoral basal resource amount
+        lake_basal_resource[i, j, 1:mx_dpth] .= 10.0 
+    end
+end
+
 
 
 # model properties
@@ -127,6 +141,7 @@ properties = (
     waterfinder = AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
     heightmap2 = heightmap2,
     lake_type = lake_type,
+    lake_type_3d = lake_type_3d,
     lake_basal_resource = lake_basal_resource,
     fully_grown = falses(dims),
 )
@@ -134,8 +149,7 @@ properties = (
 # rng
 rng = MersenneTwister(seed)
 
-model = ABM(Fish, space; properties, rng, scheduler = Schedulers.randomly, warn = false
-)
+model = ABM(Fish, space; properties, rng, scheduler = Schedulers.randomly, warn = false)
 
 # Add agents
 for _ in 1:n_fish
@@ -184,9 +198,25 @@ end
 
 # resource step - something mundane - TO BE UPDATED -------------------------------------
 function lake_resource_step!(model)
+    
     for p in positions(model)
         model.fully_grown[p...] = true
     end
+    
+    # subset basal resources
+    pelagic_growable = view(
+        model.lake_basal_resource,
+        model.lake_type_3d .== 0 ,
+    )
+
+    littoral_growable = view(
+        model.lake_basal_resource,
+        model.lake_type_3d .== 1 ,
+    )
+    
+    # grow resources
+    pelagic_growable .=  pelagic_growable .* 2.0
+    littoral_growable .=  littoral_growable .* 1.5
 end
 
 
@@ -223,7 +253,6 @@ function static_preplot!(ax, model)
 end
 
 #animalcolor(a) = :red
-
 abmvideo(
     "rabbit_fox_hawk.mp4",
     model_initilised, fish_step!, lake_resource_step!;
@@ -236,26 +265,105 @@ abmvideo(
 )
 
 
+# record model output
+model_initilised = initialize_model()
+steps = 3
+adata = [:pos]
+mdata = [:lake_basal_resource]
+
+# obtainer = copy - use this if you need to update the mdf output - by default if the output is mutable container it 
+# won't show updates. using obtainer = copy will reduce performance, only use for prototyping 
+adf, mdf = run!(model_initilised, fish_step!, lake_resource_step!, steps; adata, mdata, obtainer = deepcopy)
+mdf
+adf
+
+mdf[:,2][3] 
 
 
+# -------------------------- Testing -----------------------------------------------------------------------
 
-lake_basal_resource = zeros(dims)
+lake_url = "data\\taupo_500m.csv"
+lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
 
 
-lake_basal_resource[]
+# convert to integer
+heightmap = floor.(Int, convert.(Float64, lake_mtx))
+
+
+# rescale so that there aren't negative depth values (the deepest point in the lake = 1)
+heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
+heightmap2 .= heightmap .* -1
+
+heightmap
+heightmap2
+# try removing lake walls so we can see what is going on in the videos - doesn't work as the littoral zone is much shallower
+# than the pelagic so it obscures the view
+#heightmap2 = replace(heightmap2, -9999 => 0)
+
+# lake depth 
+mx_dpth = maximum(heightmap2)
+
+# create new lake_type variable -----------------------------------------------
+# 1 = littoral, 0 = pelagic
+lake_type = ones(Int, size(heightmap2))
+lake_type .= heightmap2
 lake_type
 
+dims = (size(heightmap2)..., mx_dpth)
 
-dims
+max_littoral_depth = 50
+
+# if take_type (depth) is between 0 and max_littoral_depth cell is littoral
+lake_type[lake_type .> -1 .&& lake_type .< (max_littoral_depth + 1)] .= 1
+
+# if lake is deeper than max_littoral_depth cell is pelagic
+lake_type[lake_type .> max_littoral_depth] .= 0
+
+lake_type
+# set limits between which agents can exist (surface and lake bed) ----------------
+# currently agents can get out of the water a bit!
+lake_surface_level = mx_dpth
+lake_floor = 1
 
 
-for i in 1:dims[1], j in 1:dims[2]
-    if xx[i,j]
-        lake_basal_resource[i, j, 1:mx_dpth] .= 5.0
-    end
+# ------------- testing set up -----------------------------------------------------
+
+
+
+for p in positions(model)
+    model.fully_grown[p...] = true
 end
+heightmap
 
 
+model_initilised.lake_basal_resource
 
+# subset resources and make them grow
+pelagic_growable = view(
+    model_initilised.lake_basal_resource,
+    lake_type_3d .== 0 ,
+)
 
+littoral_growable = view(
+    model_initilised.lake_basal_resource,
+    lake_type_3d .== 1 ,
+)
+
+pelagic_growable .=  pelagic_growable .* 2.0
+littoral_growable .=  littoral_growable .* 1.5
 lake_basal_resource
+
+
+lake_type_3d
+# Grass regrows with a random probability, scaling with the amount of time passing
+# each step of the model
+growable .=  growable .*2
+growable
+lake_type_3d
+
+
+lake_type_3d = repeat(lake_type, 1,1,dims[3])
+
+lake_type_3d 
+
+model_initilised.lake_basal_resource
