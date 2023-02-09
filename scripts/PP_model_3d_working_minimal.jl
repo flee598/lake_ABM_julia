@@ -18,7 +18,6 @@ add agent behaviour
 
 =#
 
-
 # load packages ---------------------------------------------------------------------
 using Agents, Agents.Pathfinding
 using Random
@@ -35,12 +34,11 @@ using GLMakie               # interactive plots
     length::Float64
 end
 
-# agent traits that are fixed constants  - I think... 
 
 # agent types
 Trout(id, pos, length) = Fish(id, pos, :trout, length)
 Koaro(id, pos, length) = Fish(id, pos, :koaro, length)
-Smelt(id, pos, length) = Fish(id, pos, :hawk, length)
+Smelt(id, pos, length) = Fish(id, pos, :smelt, length)
 
 
 
@@ -148,15 +146,18 @@ end
 
 
 # model properties - see type stability issue in Agents.jl -> performance tips, might need to change this
-properties = (
-    swim_walkmap = swim_walkmap,
-    waterfinder = AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
-    heightmap2 = heightmap2,
-    lake_type = lake_type,
-    lake_type_3d = lake_type_3d,
-    lake_basal_resource = lake_basal_resource,
-    fully_grown = falses(dims),
+properties = Dict(
+    :swim_walkmap => swim_walkmap,
+    :waterfinder => AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
+    :heightmap2 => heightmap2,
+    :lake_type => lake_type,
+    :lake_type_3d => lake_type_3d,
+    :lake_basal_resource => lake_basal_resource,
+    :fully_grown => falses(dims),
+    :tick => 1::Int64,
 )
+
+
 
 # rng
 rng = MersenneTwister(seed)
@@ -250,19 +251,36 @@ end
 
 # koaro movement ------------------------------------------
 function koaro_step!(koaro, model)
- # 1 = vison range
+ 
+    # 1 = vison range
  near_cells = nearby_positions(koaro.pos, model, 1)
     
- # storage
- grassy_cells = []
- 
  # find which of the nearby cells are allowed to be moved onto
+ grassy_cells = [] 
  for cell in near_cells
-     if model.swim_walkmap[cell...] > 0
+     if model.swim_walkmap[cell...] > 0  # && model.lake_basal_resource[cell...] > 0.0
          push!(grassy_cells, cell)
      end
  end
- 
+
+ #=
+# find which of the near cells have resources
+ grassy_cells_2 = []
+ for cell in grassy_cells
+    if model.lake_basal_resource[cell...] > 0.0
+        push!(grassy_cells_2, cell)
+    end
+end
+
+# find which of the near cells have predators present
+grassy_cells_2 = []
+for cell in grassy_cells
+   if model.lake_basal_resource[cell...] > 0.0
+       push!(grassy_cells_2, cell)
+   end
+end
+=#
+
  if length(grassy_cells) > 0
      # sample 1 cell
      m_to = sample(grassy_cells)
@@ -270,6 +288,8 @@ function koaro_step!(koaro, model)
      move_agent!(koaro, m_to, model)
  end
 end
+
+
 
 # smelt movement ------------------------------------------
 function smelt_step!(smelt, model)
@@ -318,8 +338,10 @@ function lake_resource_step!(model)
     )
     
     # grow resources --------------------------
-    pelagic_growable .=  pelagic_growable .* 2.0
-    littoral_growable .=  littoral_growable .* 1.5
+    pelagic_growable .=  pelagic_growable .+ 1.0
+    littoral_growable .=  littoral_growable .+ 2.0
+
+    model.tick += 1
 end
 
 
@@ -330,6 +352,7 @@ model_initilised = initialize_model()
 
 # plotting params -------------------------------------------------------------------------
 
+# agnt colours
 animalcolor(a) =
     if a.type == :trout
         :brown
@@ -344,7 +367,6 @@ plotkwargs = (;
     ac = animalcolor,
     as = 2,
     am = :circle,
-    scatterkwargs = (strokewidth = 1.0, strokecolor = :black),
 )
 
 
@@ -354,7 +376,6 @@ fig, ax, abmobs = abmplot(model_initilised;
     model_step! = lake_resource_step!,
 plotkwargs...)
 fig
-
 
 
 # 3d video with bathymetry surface added ---------------------------------------------
@@ -384,8 +405,8 @@ abmvideo(
 # record model output
 model_initilised = initialize_model()
 steps = 3
-adata = [:pos]
-mdata = [:lake_basal_resource]
+adata = [:pos, :type, :length]
+mdata = [:tick, :lake_basal_resource]
 
 # obtainer = copy - use this if you need to update the mdf output - by default if the output is mutable container it 
 # won't show updates. using obtainer = copy will reduce performance, only use for prototyping 
@@ -394,6 +415,34 @@ mdf
 adf
 
 mdf[:,2][3] 
+
+
+# interactive plot with figures ------------------------------------
+
+trout(a) = a.type == :trout
+smelt(a) = a.type == :smelt
+koaro(a) = a.type == :koaro
+
+
+adata = [(trout, count), (smelt, count), (koaro, count)]
+
+plotkwargs = (;
+    ac = animalcolor,
+    as = 2,
+    am = :circle)
+
+fig, p = abmexploration(model_initilised;
+agent_step! = fish_step!,
+model_step! = lake_resource_step!,
+plotkwargs...,
+adata,
+alabels = ["Trout abund", "Smelt abund", "koaro abund"]
+)
+
+fig
+
+
+
 
 
 # -------------------------- Testing -----------------------------------------------------------------------
@@ -445,41 +494,3 @@ lake_floor = 1
 # ------------- testing set up -----------------------------------------------------
 
 
-
-for p in positions(model)
-    model.fully_grown[p...] = true
-end
-heightmap
-
-
-model_initilised.lake_basal_resource
-
-# subset resources and make them grow
-pelagic_growable = view(
-    model_initilised.lake_basal_resource,
-    lake_type_3d .== 0 ,
-)
-
-littoral_growable = view(
-    model_initilised.lake_basal_resource,
-    lake_type_3d .== 1 ,
-)
-
-pelagic_growable .=  pelagic_growable .* 2.0
-littoral_growable .=  littoral_growable .* 1.5
-lake_basal_resource
-
-
-lake_type_3d
-# Grass regrows with a random probability, scaling with the amount of time passing
-# each step of the model
-growable .=  growable .*2
-growable
-lake_type_3d
-
-
-lake_type_3d = repeat(lake_type, 1,1,dims[3])
-
-lake_type_3d 
-
-model_initilised.lake_basal_resource
