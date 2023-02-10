@@ -14,7 +14,7 @@ Overview:
 To do
 add multiple agents
 add resources
-add agent behaviour 
+add agent behaviour
 
 =#
 
@@ -39,6 +39,13 @@ end
 Trout(id, pos, length) = Fish(id, pos, :trout, length)
 Koaro(id, pos, length) = Fish(id, pos, :koaro, length)
 Smelt(id, pos, length) = Fish(id, pos, :smelt, length)
+
+# Helper functions ----------------------------------------------------
+
+# logistic growth
+function log_grow(r, K, pop)
+    r * pop * (1 - (pop/K))
+end
 
 
 
@@ -79,10 +86,6 @@ heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
 heightmap2 .= heightmap .* -1
 
 
-# try removing lake walls so we can see what is going on in the videos - doesn't work as the littoral zone is much shallower
-# than the pelagic so it obscures the view
-#heightmap2 = replace(heightmap2, -9999 => 0)
-
 # lake depth 
 mx_dpth = maximum(heightmap2)
 
@@ -90,7 +93,6 @@ mx_dpth = maximum(heightmap2)
 # 1 = littoral, 0 = pelagic
 lake_type = ones(Int, size(heightmap2))
 lake_type .= heightmap2
-
 
 # define the maximum depth of the littoral zone - this could be automated depending on env conditions
 
@@ -153,7 +155,6 @@ properties = Dict(
     :lake_type => lake_type,
     :lake_type_3d => lake_type_3d,
     :lake_basal_resource => lake_basal_resource,
-    :fully_grown => falses(dims),
     :tick => 1::Int64,
 )
 
@@ -202,13 +203,6 @@ for _ in 1:n_smelt
     )
 end
 
-
-# here is where I add cell "traits" such as resource level
-for p in positions(model)
-    fully_grown = rand(model.rng, Bool)
-    model.fully_grown[p...] = fully_grown
-end
-
 return model
 
 end
@@ -225,29 +219,6 @@ function fish_step!(fish, model)
 end
 
 
-# trout movement ------------------------------------------
-function trout_step!(trout, model)
-    
-    # 1 = vison range
-    near_cells = nearby_positions(trout.pos, model, 1)
-    
-    # storage
-    grassy_cells = []
-    
-    # find which of the nearby cells are allowed to be moved onto
-    for cell in near_cells
-        if model.swim_walkmap[cell...] > 0
-            push!(grassy_cells, cell)
-        end
-    end
-    
-    if length(grassy_cells) > 0
-        # sample 1 cell
-        m_to = sample(grassy_cells)
-        # move
-        move_agent!(trout, m_to, model)
-    end
-end
 
 # koaro movement ------------------------------------------
 function koaro_step!(koaro, model)
@@ -256,17 +227,17 @@ function koaro_step!(koaro, model)
  near_cells = nearby_positions(koaro.pos, model, 1)
     
  # find which of the nearby cells are allowed to be moved onto
- grassy_cells = [] 
+ swimable_cells = [] 
  for cell in near_cells
      if model.swim_walkmap[cell...] > 0  # && model.lake_basal_resource[cell...] > 0.0
-         push!(grassy_cells, cell)
+         push!(swimable_cells, cell)
      end
  end
 
  #=
 # find which of the near cells have resources
  grassy_cells_2 = []
- for cell in grassy_cells
+ for cell in swimable_cells
     if model.lake_basal_resource[cell...] > 0.0
         push!(grassy_cells_2, cell)
     end
@@ -274,16 +245,16 @@ end
 
 # find which of the near cells have predators present
 grassy_cells_2 = []
-for cell in grassy_cells
+for cell in swimable_cells
    if model.lake_basal_resource[cell...] > 0.0
        push!(grassy_cells_2, cell)
    end
 end
 =#
 
- if length(grassy_cells) > 0
+ if length(swimable_cells) > 0
      # sample 1 cell
-     m_to = sample(grassy_cells)
+     m_to = sample(swimable_cells)
      # move
      move_agent!(koaro, m_to, model)
  end
@@ -291,38 +262,98 @@ end
 
 
 
+
+
 # smelt movement ------------------------------------------
+# 1: if current cell has resources do nothing
+# 2: otherwise, check which neighbouring cells have resources and are in moving range
+# 3: weight possible moving cells by prefernce term and randmoly selct one
+
 function smelt_step!(smelt, model)
-     # 1 = vison range
-     near_cells = nearby_positions(smelt.pos, model, 1)
-    
-     # storage
-     grassy_cells = []
      
-     # find which of the nearby cells are allowed to be moved onto
-     for cell in near_cells
-         if model.swim_walkmap[cell...] > 0
-             push!(grassy_cells, cell)
-         end
-     end
+    # only move if there are no resources in current cell
+    if model.lake_basal_resource[smelt.pos...] < 1.0
+        
+        # 1 = vison range
+        near_cells = nearby_positions(smelt.pos, model, 1)
+         
+        # find which of the nearby cells are allowed to be moved onto + have resources
+        # ADD TROUT AVOIDANCE
+        swimable_cells = []
+        for cell in near_cells
+            if model.swim_walkmap[cell...] > 0 && model.lake_basal_resource[cell...] > 2.0
+                push!(swimable_cells, cell)
+            end
+        end
      
-     if length(grassy_cells) > 0
-         # sample 1 cell
-         m_to = sample(grassy_cells)
-         # move
-         move_agent!(smelt, m_to, model)
-     end
+        # if there is a neighbouring cell with resources > 0, randomly select one to move to
+        if length(swimable_cells) > 0
+            
+            # First, determine if near cells are pel or lit and generate a vector of weights
+            # get resource type for grassy cells
+            ind1  = [model.lake_type_3d[t...] for t in swimable_cells]
+            ind1 = convert(Array{Float64, 1}, ind1)
+
+            # pel and lit weights
+            resource_pref_adult = 0.8
+
+            pel_p = resource_pref_adult
+            lit_p = 1.0 - pel_p
+
+            # convert pel/lit indicies to weights
+            ind1[ind1 .== 0.0] .= pel_p
+            ind1[ind1 .== 1.0] .= lit_p
+
+            # randomly choose one of the nearby cells with resources, weighted by habitat preference
+            m_to = sample(swimable_cells, Weights(ind1))
+            # move
+            move_agent!(smelt, m_to, model)
+
+        else
+            # if none of the near cells have resources, just pick one at random - NO LITTORAL/PELAGIC PREFERENCE
+            swimable_cells2 = []
+            for cell in near_cells
+                if model.swim_walkmap[cell...] > 0
+                    push!(swimable_cells2, cell)
+                end
+            end
+
+            m_to = sample(collect(swimable_cells2))
+            move_agent!(smelt, m_to, model)
+        end
+    end
 end
 
 
 
-# resource step - something mundane - TO BE UPDATED -------------------------------------
-function lake_resource_step!(model)
+# trout movement ------------------------------------------
+function trout_step!(trout, model)
     
-    for p in positions(model)
-        model.fully_grown[p...] = true
+    # 1 = vison range
+    near_cells = nearby_positions(trout.pos, model, 1)
+    
+    # storage
+    swimable_cells = []
+    
+    # find which of the nearby cells are allowed to be moved onto
+    for cell in near_cells
+        if model.swim_walkmap[cell...] > 0
+            push!(swimable_cells, cell)
+        end
     end
     
+    if length(swimable_cells) > 0
+        # sample 1 cell
+        m_to = sample(swimable_cells)
+        # move
+        move_agent!(trout, m_to, model)
+    end
+end
+
+
+# resource step - something mundane - TO BE UPDATED -------------------------------------
+function lake_resource_step!(model)
+
     # subset basal resources -----------------
 
     # pelagic
@@ -337,9 +368,20 @@ function lake_resource_step!(model)
         model.lake_type_3d .== 1 ,
     )
     
-    # grow resources --------------------------
-    pelagic_growable .=  pelagic_growable .+ 1.0
-    littoral_growable .=  littoral_growable .+ 2.0
+    # grow resources logistic growth ---------------------------
+    #pelagic_growable .=  pelagic_growable .+ 1.0
+    #littoral_growable .=  littoral_growable .+ 2.0
+
+    for i in eachindex(pelagic_growable)
+        pelagic_growable[i] = round(pelagic_growable[i] + log_grow(0.2, 100,
+        pelagic_growable[i]), digits = 3)  + 0.5 # add small constant, or else if it goes to 0 it will never regrow 
+    end
+
+
+    for i in eachindex(littoral_growable)
+        littoral_growable[i] = round(littoral_growable[i] + log_grow(0.2, 100,
+        littoral_growable[i]), digits = 3)   + 0.5
+    end
 
     model.tick += 1
 end
@@ -354,13 +396,13 @@ model_initilised = initialize_model()
 
 # agnt colours
 animalcolor(a) =
-    if a.type == :trout
+if a.type == :trout
         :brown
-    elseif a.type == :koaro
+elseif a.type == :koaro
         :orange
-    else
+else
         :blue
-    end
+end
 
 
 plotkwargs = (;
@@ -414,7 +456,7 @@ adf, mdf = run!(model_initilised, fish_step!, lake_resource_step!, steps; adata,
 mdf
 adf
 
-mdf[:,2][3] 
+mdf[:,3][3] 
 
 
 # interactive plot with figures ------------------------------------
