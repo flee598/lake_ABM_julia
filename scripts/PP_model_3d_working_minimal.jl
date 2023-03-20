@@ -18,6 +18,13 @@ add agent behaviour
 
 =#
 
+# CURRENTLY WORKING ON:
+# SMELT MOVEMENT:
+#       - SMELT RESOURCE CONSUMPTION
+# EXPAND TO kOARO/trout
+
+
+
 # load packages ---------------------------------------------------------------------
 using Agents, Agents.Pathfinding
 using Random
@@ -26,7 +33,7 @@ using CSV                   # importing bathymetry from csv
 using DataFrames            # importing bathymetry from csv
 using InteractiveDynamics   # interactive plots
 using GLMakie               # interactive plots
-# using FileIO: load        # used to download example heightmap
+using FileIO: load        # used to download example heightmap
 
 # define agents
 @agent Fish GridAgent{3} begin
@@ -42,12 +49,12 @@ Smelt(id, pos, length) = Fish(id, pos, :smelt, length)
 
 # Helper functions ----------------------------------------------------
 
-# logistic growth
+# logistic growth - used for resources
 function log_grow(r, K, pop)
     r * pop * (1 - (pop/K))
 end
 
-
+1 <= 5 < 10
 
 # initialize model ------------------------------------------------------------------------
 function initialize_model(;
@@ -55,35 +62,34 @@ function initialize_model(;
     #"https://raw.githubusercontent.com/JuliaDynamics/" *
     #"JuliaDynamics/master/videos/agents/rabbit_fox_hawk_heightmap.png", 
     lake_url = "data\\taupo_500m.csv",
-    n_trout = 3,
-    n_koaro = 5,
-    n_smelt = 7,
+    n_trout = 5,
+    n_koaro = 10,
+    n_smelt = 10,
     max_littoral_depth = 50,    # how far down does the littoral go in meters
     seed = 12345,
 )
 
 
-# try removing lake walls so we can see what is going on in the videos - doesn't work as the littoral zone is much shallower
-# than the pelagic so it obscures the view
-# heightmap2 = replace(heightmap2, 10155 => 0)
-
-
-
-# example topology
+# example topology ----------------------------------------------------
 #heightmap = floor.(Int, convert.(Float64, load(download(heightmap_url))) * 39) .+ 1
+#heightmap2 = heightmap 
+# -----------------------------------------------------------------------
 
-# lake_url = "data\\taupo_500m.csv"
+# OR
+
 
 # load lake topology ----------------------------------------------------------
-lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
+ lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
 
 # convert to integer
-heightmap = floor.(Int, convert.(Float64, lake_mtx))
+ heightmap = floor.(Int, convert.(Float64, lake_mtx))
 
 
 # rescale so that there aren't negative depth values (the deepest point in the lake = 1)
 heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
 heightmap2 .= heightmap .* -1
+# -------------------------------------------------
+#
 
 
 # lake depth 
@@ -106,7 +112,7 @@ lake_type[lake_type .> max_littoral_depth] .= 0
 # set limits between which agents can exist (surface and lake bed) ----------------
 # currently agents can get out of the water a bit!
 lake_surface_level = mx_dpth
-lake_floor = 1
+lake_floor = 2
 
 
 # lake dimensions ---------------------------------------------------------
@@ -125,11 +131,30 @@ space = GridSpace(dims, periodic = false)
 swim_walkmap = BitArray(falses(dims...))
 
  # fish can swim at any between the lake bed and lake suface
+
+ #=
+for i in 1:dims[1], j in 1:dims[2]
+    if lake_floor < heightmap2[i, j] < lake_surface_level
+        swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
+    end
+end  =# 
+
+# for video - trout/smelt only in deep water
 for i in 1:dims[1], j in 1:dims[2]
     if lake_floor < heightmap2[i, j] < lake_surface_level
         swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
     end
 end
+
+
+# moving on lake flooor - rather than anywhere - not used
+land_walkmap = BitArray(falses(dims...))
+    for i in 1:dims[1], j in 1:dims[2]
+        # land animals can only walk on top of the terrain between water_level and grass_level
+        if lake_floor <= heightmap[i, j] < lake_surface_level
+            land_walkmap[i, j, heightmap[i, j]+1] = true
+        end
+    end
 
 
 # create lake basal resource array
@@ -150,6 +175,7 @@ end
 # model properties - see type stability issue in Agents.jl -> performance tips, might need to change this
 properties = Dict(
     :swim_walkmap => swim_walkmap,
+    :landfinder => AStar(space; walkmap = land_walkmap),
     :waterfinder => AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
     :heightmap2 => heightmap2,
     :lake_type => lake_type,
@@ -223,44 +249,62 @@ end
 # koaro movement ------------------------------------------
 function koaro_step!(koaro, model)
  
-    # 1 = vison range
- near_cells = nearby_positions(koaro.pos, model, 1)
+    # only move if there are no resources in current cell   ------- CURRENTLY CAUSES SMELT NOT TO MOVE - need to implement resource consumption
+    if model.lake_basal_resource[koaro.pos...] < 10.0
+            
+        # 1 = vison range
+        near_cells = nearby_positions(koaro.pos, model, 1)
+        
+        # find which of the nearby cells are allowed to be moved onto + have resources
+        # ADD TROUT AVOIDANCE
+        swimable_cells = []
+        for cell in near_cells
+            if model.swim_walkmap[cell...] > 0 && model.lake_basal_resource[cell...] > 2.0
+                push!(swimable_cells, cell)
+            end
+        end
     
- # find which of the nearby cells are allowed to be moved onto
- swimable_cells = [] 
- for cell in near_cells
-     if model.swim_walkmap[cell...] > 0  # && model.lake_basal_resource[cell...] > 0.0
-         push!(swimable_cells, cell)
-     end
- end
+        # if there is a neighbouring cell with resources > 0, randomly select one to move to
+        if length(swimable_cells) > 0
+            
+            # First, determine if near cells are pel or lit and generate a vector of weights
+            # get resource type for grassy cells
+            ind1  = [model.lake_type_3d[t...] for t in swimable_cells]
+            ind1 = convert(Array{Float64, 1}, ind1)
 
- #=
-# find which of the near cells have resources
- grassy_cells_2 = []
- for cell in swimable_cells
-    if model.lake_basal_resource[cell...] > 0.0
-        push!(grassy_cells_2, cell)
+            # pel and lit weights - 1 = pelagic, 0 = littoral
+            resource_pref_adult = 0.5
+
+            pel_p = resource_pref_adult
+            lit_p = 1.0 - pel_p
+
+            # convert pel/lit indicies to weights
+            ind1[ind1 .== 0.0] .= pel_p
+            ind1[ind1 .== 1.0] .= lit_p
+
+            # randomly choose one of the nearby cells with resources, weighted by habitat preference
+            m_to = sample(swimable_cells, Weights(ind1))
+            # move
+            move_agent!(koaro, m_to, model)
+
+        else
+            # if none of the near cells have resources, just pick one at random - NO LITTORAL/PELAGIC PREFERENCE
+            swimable_cells2 = []
+            for cell in near_cells
+                if model.swim_walkmap[cell...] > 0
+                    push!(swimable_cells2, cell)
+                end
+            end
+            m_to = sample(collect(swimable_cells2))
+            move_agent!(koaro, m_to, model)
+        end
     end
+
+    # NOTE YET IMPLEMNTED
+    #eat!(koaro, model)
+
+
 end
-
-# find which of the near cells have predators present
-grassy_cells_2 = []
-for cell in swimable_cells
-   if model.lake_basal_resource[cell...] > 0.0
-       push!(grassy_cells_2, cell)
-   end
-end
-=#
-
- if length(swimable_cells) > 0
-     # sample 1 cell
-     m_to = sample(swimable_cells)
-     # move
-     move_agent!(koaro, m_to, model)
- end
-end
-
-
 
 
 
@@ -271,8 +315,8 @@ end
 
 function smelt_step!(smelt, model)
      
-    # only move if there are no resources in current cell
-    if model.lake_basal_resource[smelt.pos...] < 1.0
+    # only move if there are no resources in current cell   ------- CURRENTLY CAUSES SMELT NOT TO MOVE - need to implement resource consumption
+    if model.lake_basal_resource[smelt.pos...] < 10.0
         
         # 1 = vison range
         near_cells = nearby_positions(smelt.pos, model, 1)
@@ -294,8 +338,8 @@ function smelt_step!(smelt, model)
             ind1  = [model.lake_type_3d[t...] for t in swimable_cells]
             ind1 = convert(Array{Float64, 1}, ind1)
 
-            # pel and lit weights
-            resource_pref_adult = 0.8
+            # pel and lit weights - 1 = pelagic, 0 = littoral
+            resource_pref_adult = 0.5
 
             pel_p = resource_pref_adult
             lit_p = 1.0 - pel_p
@@ -322,7 +366,40 @@ function smelt_step!(smelt, model)
             move_agent!(smelt, m_to, model)
         end
     end
+
+    # NOTE YET IMPLEMNTED
+    eat!(smelt, model)
+
+
 end
+
+
+
+# define agent eating -----------------------------------------------------------------------------
+function eat!(smelt, model)
+
+    consume_amount = 50.0
+
+    if model.lake_basal_resource[smelt.pos...] > 0.1     # if there are rsources available 
+        #smelt.energy += smelt.Δenergy                    # give smelt energy
+        #smelt.length += smelt.Δenergy                    # grow smelt
+
+        # reduce resource amount - reduces resource by "consume_amount", unless less than that amount exists, then consume all
+        fut_res = model.lake_basal_resource[smelt.pos...] - consume_amount
+
+        if fut_res < 0.0 
+            model.lake_basal_resource[smelt.pos...] -= abs(fut_res)
+        else
+            model.lake_basal_resource[smelt.pos...] -= consume_amount
+        end
+
+        # currently resources can go negative ... fix
+    end
+    return
+end
+
+
+
 
 
 
@@ -355,7 +432,7 @@ end
 function lake_resource_step!(model)
 
     # subset basal resources -----------------
-
+#=
     # pelagic
     pelagic_growable = view(
         model.lake_basal_resource,
@@ -367,26 +444,37 @@ function lake_resource_step!(model)
         model.lake_basal_resource,
         model.lake_type_3d .== 1 ,
     )
-    
+    =#
     # grow resources logistic growth ---------------------------
-    #pelagic_growable .=  pelagic_growable .+ 1.0
-    #littoral_growable .=  littoral_growable .+ 2.0
-
-    for i in eachindex(pelagic_growable)
-        pelagic_growable[i] = round(pelagic_growable[i] + log_grow(0.2, 100,
-        pelagic_growable[i]), digits = 3)  + 0.5 # add small constant, or else if it goes to 0 it will never regrow 
-    end
 
 
-    for i in eachindex(littoral_growable)
-        littoral_growable[i] = round(littoral_growable[i] + log_grow(0.2, 100,
-        littoral_growable[i]), digits = 3)   + 0.5
-    end
+
+
+  #  for i in eachindex(pelagic_growable)
+   #    # pelagic_growable[i] = round(pelagic_growable[i] + log_grow(0.2, 100, pelagic_growable[i]), digits = 3)  + 0.5 # add small constant, or else if it goes to 0 it will never regrow 
+    #end
+
+    model.lake_basal_resource[model.lake_type_3d .== 0] .= model.lake_basal_resource[model.lake_type_3d .== 0] .+ 10.00
+
+    model.lake_basal_resource[model.lake_type_3d .== 1] .= model.lake_basal_resource[model.lake_type_3d .== 0] .+ 5.00
+
+#    for i in eachindex(littoral_growable)
+ #       #littoral_growable[i] = round(littoral_growable[i] + log_grow(0.2, 100, littoral_growable[i]), digits = 3)   + 0.5
+#
+ #   end
 
     model.tick += 1
 end
 
 
+model_initilised.lake_basal_resource[model_initilised.lake_type_3d .== 0] .= model_initilised.lake_basal_resource[model_initilised.lake_type_3d .== 0] .+ 10.00
+
+
+model_initilised.lake_basal_resource
+model_initilised.lake_type_3d
+
+
+model_initilised.lake_type_3d .== 0
 
 
 # set up model -----------------------------------------------------------------------------
@@ -397,9 +485,9 @@ model_initilised = initialize_model()
 # agnt colours
 animalcolor(a) =
 if a.type == :trout
-        :brown
+        :yellow
 elseif a.type == :koaro
-        :orange
+        :red
 else
         :blue
 end
@@ -436,17 +524,18 @@ abmvideo(
     "rabbit_fox_hawk.mp4",
     model_initilised, fish_step!, lake_resource_step!;
     figure = (resolution = (1920 , 1080),),
-    frames = 40,
-    ac = :red,
+    frames = 150,
+    framerate = 5,
+    ac = animalcolor,
     as = 1,
     static_preplot!,
-    title = "Rabbit Fox Hawk with pathfinding"
+    title = "Lake food web. Trout: yellow, Smelt: blue, Koaro: red "
 )
 
 
 # record model output
 model_initilised = initialize_model()
-steps = 3
+steps = 10
 adata = [:pos, :type, :length]
 mdata = [:tick, :lake_basal_resource]
 
@@ -456,7 +545,30 @@ adf, mdf = run!(model_initilised, fish_step!, lake_resource_step!, steps; adata,
 mdf
 adf
 
-mdf[:,3][3] 
+mdf[:,3][2][:,:,1]
+adf[:,3]
+
+df1 = filter(:id => n -> n == 10, adf)
+df1
+
+mdf[:,3][1][17,4,101]
+mdf[:,3][2][17,4,101]
+
+mdf[:,3][4][16,5,102]
+mdf[:,3][5][16,5,102]
+mdf[:,3][6][16,5,102]
+mdf[:,3][7][16,5,102]
+mdf[:,3][8][16,5,102]
+mdf[:,3][9][16,5,102]
+
+mdf[:,3][10][16,6,103]
+mdf[:,3][11][16,6,103]
+
+mdf[:,3][1]
+
+mdf[:,3][10]
+
+
 
 
 # interactive plot with figures ------------------------------------
@@ -536,3 +648,37 @@ lake_floor = 1
 # ------------- testing set up -----------------------------------------------------
 
 
+heightmap_url =
+"https://raw.githubusercontent.com/JuliaDynamics/" *
+"JuliaDynamics/master/videos/agents/rabbit_fox_hawk_heightmap.png"
+
+max_littoral_depth = 50   # how far down does the littoral go in meters
+
+
+
+# example topology
+heightmap = floor.(Int, convert.(Float64, load(download(heightmap_url))) * 39) .+ 1
+
+#lake_url = "data\\taupo_500m.csv"
+
+# load lake topology ----------------------------------------------------------
+# lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
+
+# convert to integer
+# heightmap = floor.(Int, convert.(Float64, lake_mtx))
+
+
+# rescale so that there aren't negative depth values (the deepest point in the lake = 1)
+#heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
+#heightmap2 .= heightmap .* -1
+
+
+# lake depth 
+mx_dpth = maximum(heightmap2)
+
+# create new lake_type variable -----------------------------------------------
+# 1 = littoral, 0 = pelagic
+lake_type = ones(Int, size(heightmap2))
+lake_type .= heightmap2
+
+# define the maximum depth of the littoral zone - this could be automated depending on env conditions
