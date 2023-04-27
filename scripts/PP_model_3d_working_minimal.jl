@@ -24,7 +24,6 @@ add agent behaviour
 # EXPAND TO kOARO/trout
 
 
-
 # load packages ---------------------------------------------------------------------
 using Agents, Agents.Pathfinding
 using Random
@@ -54,8 +53,6 @@ function log_grow(r, K, pop)
     r * pop * (1 - (pop/K))
 end
 
-1 <= 5 < 10
-
 # initialize model ------------------------------------------------------------------------
 function initialize_model(;
     #heightmap_url =
@@ -66,170 +63,168 @@ function initialize_model(;
     n_koaro = 10,
     n_smelt = 10,
     max_littoral_depth = 50,    # how far down does the littoral go in meters
-    seed = 12345,
-)
+    seed = 12345,)
 
 
-# example topology ----------------------------------------------------
-#heightmap = floor.(Int, convert.(Float64, load(download(heightmap_url))) * 39) .+ 1
-#heightmap2 = heightmap 
-# -----------------------------------------------------------------------
+    # example topology ----------------------------------------------------
+    #heightmap = floor.(Int, convert.(Float64, load(download(heightmap_url))) * 39) .+ 1
+    #heightmap2 = heightmap 
+    # -----------------------------------------------------------------------
 
-# OR
+    # OR
 
+    # load lake topology ----------------------------------------------------------
+    lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
 
-# load lake topology ----------------------------------------------------------
- lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
-
-# convert to integer
- heightmap = floor.(Int, convert.(Float64, lake_mtx))
-
-
-# rescale so that there aren't negative depth values (the deepest point in the lake = 1)
-heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
-heightmap2 .= heightmap .* -1
-# -------------------------------------------------
-#
+    # convert to integer
+    heightmap = floor.(Int, convert.(Float64, lake_mtx))
 
 
-# lake depth 
-mx_dpth = maximum(heightmap2)
-
-# create new lake_type variable -----------------------------------------------
-# 1 = littoral, 0 = pelagic
-lake_type = ones(Int, size(heightmap2))
-lake_type .= heightmap2
-
-# define the maximum depth of the littoral zone - this could be automated depending on env conditions
-
-# if take_type (depth) is between 0 and max_littoral_depth cell is littoral
-lake_type[lake_type .> -1 .&& lake_type .< (max_littoral_depth + 1)] .= 1
-
-# if lake is deeper than max_littoral_depth cell is pelagic
-lake_type[lake_type .> max_littoral_depth] .= 0
+    # rescale so that there aren't negative depth values (the deepest point in the lake = 1)
+    heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
+    heightmap2 .= heightmap .* -1
+    # -------------------------------------------------
+    #
 
 
-# set limits between which agents can exist (surface and lake bed) ----------------
-# currently agents can get out of the water a bit!
-lake_surface_level = mx_dpth
-lake_floor = 2
+    # lake depth 
+    mx_dpth = maximum(heightmap2)
+
+    # create new lake_type variable -----------------------------------------------
+    # 1 = littoral, 0 = pelagic
+    lake_type = ones(Int, size(heightmap2))
+    lake_type .= heightmap2
+
+    # define the maximum depth of the littoral zone - this could be automated depending on env conditions
+
+    # if take_type (depth) is between 0 and max_littoral_depth cell is littoral
+    lake_type[lake_type .> -1 .&& lake_type .< (max_littoral_depth + 1)] .= 1
+
+    # if lake is deeper than max_littoral_depth cell is pelagic
+    lake_type[lake_type .> max_littoral_depth] .= 0
 
 
-# lake dimensions ---------------------------------------------------------
-dims = (size(heightmap2)..., mx_dpth)
-
-# 3d version of lake type, used for indexing
-lake_type_3d = repeat(lake_type, 1,1,dims[3])
-
-
-# Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
-# might only be for continuous spaces
-#space = GridSpace((100, 100, 50), periodic = false)
-space = GridSpace(dims, periodic = false)
-
-#  swimable space
-swim_walkmap = BitArray(falses(dims...))
-
- # fish can swim at any between the lake bed and lake suface
-
- #=
-for i in 1:dims[1], j in 1:dims[2]
-    if lake_floor < heightmap2[i, j] < lake_surface_level
-        swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
-    end
-end  =# 
-
-# for video - trout/smelt only in deep water
-for i in 1:dims[1], j in 1:dims[2]
-    if lake_floor < heightmap2[i, j] < lake_surface_level
-        swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
-    end
-end
+    # set limits between which agents can exist (surface and lake bed) ----------------
+    # currently agents can get out of the water a bit!
+    lake_surface_level = mx_dpth
+    lake_floor = 2
 
 
-# moving on lake flooor - rather than anywhere - not used
-land_walkmap = BitArray(falses(dims...))
+    # lake dimensions ---------------------------------------------------------
+    dims = (size(heightmap2)..., mx_dpth)
+
+    # 3d version of lake type, used for indexing
+    lake_type_3d = repeat(lake_type, 1,1,dims[3])
+
+    # Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
+    # might only be for continuous spaces
+    #space = GridSpace((100, 100, 50), periodic = false)
+    space = GridSpace(dims, periodic = false)
+
+    #  swimable space
+    swim_walkmap = BitArray(falses(dims...))
+
+    # fish can swim at any depth between the lake bed and lake suface
+
+
     for i in 1:dims[1], j in 1:dims[2]
-        # land animals can only walk on top of the terrain between water_level and grass_level
-        if lake_floor <= heightmap[i, j] < lake_surface_level
-            land_walkmap[i, j, heightmap[i, j]+1] = true
+        if lake_floor < heightmap2[i, j] < lake_surface_level
+            swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
+        end
+    end
+
+    #=
+    # for video - trout/smelt only in deep water
+    for i in 1:dims[1], j in 1:dims[2]
+        if lake_floor < heightmap2[i, j] < lake_surface_level
+            swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
+        end
+    end
+    =#
+
+    # moving on lake flooor - rather than anywhere - not used
+    land_walkmap = BitArray(falses(dims...))
+        for i in 1:dims[1], j in 1:dims[2]
+            # land animals can only walk on top of the terrain between water_level and grass_level
+            if lake_floor <= heightmap[i, j] < lake_surface_level
+                land_walkmap[i, j, heightmap[i, j]+1] = true
+            end
+        end
+
+
+    # create lake basal resource array
+    lake_basal_resource = zeros(dims)
+
+    # populate with basal resource
+    # this is a 3d array, where each matrix slice is x/y and the z dim is depth 
+    for i in 1:dims[1], j in 1:dims[2]
+        if lake_type[i,j] == 0    # pelagic basal resource amount
+            lake_basal_resource[i, j, 1:mx_dpth] .= 5.0
+        end
+        if lake_type[i,j] == 1 # littoral basal resource amount
+            lake_basal_resource[i, j, 1:mx_dpth] .= 10.0 
         end
     end
 
 
-# create lake basal resource array
-lake_basal_resource = zeros(dims)
+    # model properties - see type stability issue in Agents.jl -> performance tips, might need to change this
+    properties = Dict(
+        :swim_walkmap => swim_walkmap,
+        :landfinder => AStar(space; walkmap = land_walkmap),
+        :waterfinder => AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
+        :heightmap2 => heightmap2,
+        :lake_type => lake_type,
+        :lake_type_3d => lake_type_3d,
+        :lake_basal_resource => lake_basal_resource,
+        :tick => 1::Int64,
+    )
 
-# populate with basal resource
-# this is a 3d array, where each matrix slice is x/y and the z dim is depth 
-for i in 1:dims[1], j in 1:dims[2]
-    if lake_type[i,j] == 0    # pelagic basal resource amount
-        lake_basal_resource[i, j, 1:mx_dpth] .= 5.0
+
+
+    # rng
+    rng = MersenneTwister(seed)
+
+    model = ABM(Fish, space; properties, rng, scheduler = Schedulers.randomly, warn = false)
+
+    # Add agents -----------------------
+
+    # trout
+    for _ in 1:n_trout
+        add_agent_pos!(
+            Trout(
+                nextid(model), 
+                random_walkable(model, model.waterfinder),
+                10.0,     # fish length
+            ),
+            model,
+        )
     end
-    if lake_type[i,j] == 1 # littoral basal resource amount
-        lake_basal_resource[i, j, 1:mx_dpth] .= 10.0 
+
+    # koaro
+    for _ in 1:n_koaro
+        add_agent_pos!(
+            Koaro(
+                nextid(model), 
+                random_walkable(model, model.waterfinder),
+                10.0,     # fish length
+            ),
+            model,
+        )
     end
-end
 
+    # smelt
+    for _ in 1:n_smelt
+        add_agent_pos!(
+            Smelt(
+                nextid(model), 
+                random_walkable(model, model.waterfinder),
+                10.0,     # fish length
+            ),
+            model,
+        )
+    end
 
-# model properties - see type stability issue in Agents.jl -> performance tips, might need to change this
-properties = Dict(
-    :swim_walkmap => swim_walkmap,
-    :landfinder => AStar(space; walkmap = land_walkmap),
-    :waterfinder => AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
-    :heightmap2 => heightmap2,
-    :lake_type => lake_type,
-    :lake_type_3d => lake_type_3d,
-    :lake_basal_resource => lake_basal_resource,
-    :tick => 1::Int64,
-)
-
-
-
-# rng
-rng = MersenneTwister(seed)
-
-model = ABM(Fish, space; properties, rng, scheduler = Schedulers.randomly, warn = false)
-
-# Add agents -----------------------
-
-# trout
-for _ in 1:n_trout
-    add_agent_pos!(
-        Trout(
-            nextid(model), 
-            random_walkable(model, model.waterfinder),
-            10.0,     # fish length
-        ),
-        model,
-    )
-end
-
-# koaro
-for _ in 1:n_koaro
-    add_agent_pos!(
-        Koaro(
-            nextid(model), 
-            random_walkable(model, model.waterfinder),
-            10.0,     # fish length
-        ),
-        model,
-    )
-end
-
-# smelt
-for _ in 1:n_smelt
-    add_agent_pos!(
-        Smelt(
-            nextid(model), 
-            random_walkable(model, model.waterfinder),
-            10.0,     # fish length
-        ),
-        model,
-    )
-end
-
-return model
+    return model
 
 end
 
@@ -243,8 +238,6 @@ function fish_step!(fish, model)
         smelt_step!(fish, model)
     end
 end
-
-
 
 # koaro movement ------------------------------------------
 function koaro_step!(koaro, model)
@@ -301,12 +294,10 @@ function koaro_step!(koaro, model)
     end
 
     # NOTE YET IMPLEMNTED
-    #eat!(koaro, model)
+    # eat!(koaro, model)
 
 
 end
-
-
 
 # smelt movement ------------------------------------------
 # 1: if current cell has resources do nothing
@@ -352,7 +343,6 @@ function smelt_step!(smelt, model)
             m_to = sample(swimable_cells, Weights(ind1))
             # move
             move_agent!(smelt, m_to, model)
-
         else
             # if none of the near cells have resources, just pick one at random - NO LITTORAL/PELAGIC PREFERENCE
             swimable_cells2 = []
@@ -367,10 +357,35 @@ function smelt_step!(smelt, model)
         end
     end
 
-    # NOTE YET IMPLEMNTED
+    # NOT YET IMPLEMNTED
     eat!(smelt, model)
 
 
+end
+
+
+# trout movement ------------------------------------------
+function trout_step!(trout, model)
+    
+    # 1 = vison range
+    near_cells = nearby_positions(trout.pos, model, 1)
+    
+    # storage
+    swimable_cells = []
+    
+    # find which of the nearby cells are allowed to be moved onto
+    for cell in near_cells
+        if model.swim_walkmap[cell...] > 0
+            push!(swimable_cells, cell)
+        end
+    end
+    
+    if length(swimable_cells) > 0
+        # sample 1 cell
+        m_to = sample(swimable_cells)
+        # move
+        move_agent!(trout, m_to, model)
+    end
 end
 
 
@@ -399,86 +414,22 @@ function eat!(smelt, model)
 end
 
 
-
-
-
-
-# trout movement ------------------------------------------
-function trout_step!(trout, model)
-    
-    # 1 = vison range
-    near_cells = nearby_positions(trout.pos, model, 1)
-    
-    # storage
-    swimable_cells = []
-    
-    # find which of the nearby cells are allowed to be moved onto
-    for cell in near_cells
-        if model.swim_walkmap[cell...] > 0
-            push!(swimable_cells, cell)
-        end
-    end
-    
-    if length(swimable_cells) > 0
-        # sample 1 cell
-        m_to = sample(swimable_cells)
-        # move
-        move_agent!(trout, m_to, model)
-    end
-end
-
-
 # resource step - something mundane - TO BE UPDATED -------------------------------------
 function lake_resource_step!(model)
 
-    # subset basal resources -----------------
-#=
-    # pelagic
-    pelagic_growable = view(
-        model.lake_basal_resource,
-        model.lake_type_3d .== 0 ,
-    )
-
-    # littoral 
-    littoral_growable = view(
-        model.lake_basal_resource,
-        model.lake_type_3d .== 1 ,
-    )
-    =#
-    # grow resources logistic growth ---------------------------
-
-
-
-
-  #  for i in eachindex(pelagic_growable)
-   #    # pelagic_growable[i] = round(pelagic_growable[i] + log_grow(0.2, 100, pelagic_growable[i]), digits = 3)  + 0.5 # add small constant, or else if it goes to 0 it will never regrow 
-    #end
+    # will need to eventually add logistic growth
+    # pelagic_growable[i] = round(pelagic_growable[i] + log_grow(0.2, 100, pelagic_growable[i]), digits = 3)  + 0.5 # add small constant, or else if it goes to 0 it will never regrow 
 
     model.lake_basal_resource[model.lake_type_3d .== 0] .= model.lake_basal_resource[model.lake_type_3d .== 0] .+ 10.00
 
-    model.lake_basal_resource[model.lake_type_3d .== 1] .= model.lake_basal_resource[model.lake_type_3d .== 0] .+ 5.00
-
-#    for i in eachindex(littoral_growable)
- #       #littoral_growable[i] = round(littoral_growable[i] + log_grow(0.2, 100, littoral_growable[i]), digits = 3)   + 0.5
-#
- #   end
+    model.lake_basal_resource[model.lake_type_3d .== 1] .= model.lake_basal_resource[model.lake_type_3d .== 1] .+ 5.00
 
     model.tick += 1
 end
 
-
-model_initilised.lake_basal_resource[model_initilised.lake_type_3d .== 0] .= model_initilised.lake_basal_resource[model_initilised.lake_type_3d .== 0] .+ 10.00
-
-
-model_initilised.lake_basal_resource
-model_initilised.lake_type_3d
-
-
-model_initilised.lake_type_3d .== 0
-
-
 # set up model -----------------------------------------------------------------------------
 model_initilised = initialize_model() 
+
 
 # plotting params -------------------------------------------------------------------------
 
@@ -505,6 +456,7 @@ fig, ax, abmobs = abmplot(model_initilised;
     agent_step! = fish_step!,
     model_step! = lake_resource_step!,
 plotkwargs...)
+
 fig
 
 
