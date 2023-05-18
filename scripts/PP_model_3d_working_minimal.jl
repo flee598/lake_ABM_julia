@@ -84,8 +84,6 @@ function initialize_model(;
     heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
     heightmap2 .= heightmap .* -1
     # -------------------------------------------------
-    #
-
 
     # lake depth 
     mx_dpth = maximum(heightmap2)
@@ -103,44 +101,32 @@ function initialize_model(;
     # if lake is deeper than max_littoral_depth cell is pelagic
     lake_type[lake_type .> max_littoral_depth] .= 0
 
-
     # set limits between which agents can exist (surface and lake bed) ----------------
     # currently agents can get out of the water a bit!
     lake_surface_level = mx_dpth
     lake_floor = 2
 
-
     # lake dimensions ---------------------------------------------------------
     dims = (size(heightmap2)..., mx_dpth)
 
     # 3d version of lake type, used for indexing
-    lake_type_3d = repeat(lake_type, 1,1,dims[3])
+    lake_type_3d = repeat(lake_type, 1,1, dims[3])
 
     # Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
     # might only be for continuous spaces
     #space = GridSpace((100, 100, 50), periodic = false)
     space = GridSpace(dims, periodic = false)
 
-    #  swimable space
+    #  swimable space ----------------------------------------------------
     swim_walkmap = BitArray(falses(dims...))
 
     # fish can swim at any depth between the lake bed and lake suface
-
-
     for i in 1:dims[1], j in 1:dims[2]
         if lake_floor < heightmap2[i, j] < lake_surface_level
             swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
         end
     end
-
-    #=
-    # for video - trout/smelt only in deep water
-    for i in 1:dims[1], j in 1:dims[2]
-        if lake_floor < heightmap2[i, j] < lake_surface_level
-            swim_walkmap[i, j, (heightmap2[i, j]+1):lake_surface_level] .= true
-        end
-    end
-    =#
+    
 
     # moving on lake flooor - rather than anywhere - not used
     land_walkmap = BitArray(falses(dims...))

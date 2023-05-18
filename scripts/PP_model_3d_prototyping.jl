@@ -1,190 +1,320 @@
-using Agents
+#=
+3D model of a lake food web.
+
+Overview:
+1: generate a 3D lake environemnt from bathymetry data (currently csv)
+2: populate lake with fish (3 species, trout (top predator), smelt and koaro (compeititors that consume resources produced)
+   in cells) - fish have a variety of traits (e.g. length)
+3: define lake cell traits (e.g. resource type (pelagic vs littoral), growth rate)
+4: define fish movement (random in 3D, but weighted to move towards resources)
+5: define fish eat
+6: define fish reproduce 
+7: define fish die
+9: run for n model steps
+=#
+
+#= 
+To do
+If length < 5mm be pelagic (koaro and smelt), if larger, smelt pelagic, koaro littoral
+large smelt preference prey term - small koaro then pelagic resource, then littoral resource
+
+Trout predation
+1: if prey in nearby cell move to cell (have preference term for smelt)
+2: consume n prey (scale with length?)
+
+koaro/smelt predator avoidence - can do last
+
+=#
+
+
+#using Agents
+using Agents, Agents.Pathfinding
 using Random
-using Distributions
+using Distributions   
 using InteractiveDynamics
-using GLMakie
+using GLMakie                   # for interactive plots
 using StatsBase
+using CSV                      # importing CSV
+using DataFrames               # importing bathymetry from csv
+
 
 # define agents -----------------------------------------------------------------------------
 # geneic traits of all fish
-@agent Smelt GridAgent{2} begin
+@agent Fish GridAgent{3} begin
+    type::Symbol                      # koaro, smelt, trout
     energy::Float64                   # current energy level
-    Δenergy::Float64                  # energy from food
-    reproduction::Float64             # prob of reproducing
-    consume_amount::Float64           # amount of resource consumed in one predation event
     length::Float64                   # length in mm
-    vision_range::Int64               # number of cells agent can "see"
-    mortality_random::Float64         # probability of random mortality / time step
-    mortality_reproduction::Float64   # probability of mortality after reproduction
-    resource_pref_adult::Float64      # smelt/koaro: 1 = pelagic, 2 = littoral, trout: 1 = smelt, 2 = koaro
-    resource_pref_juv::Float64        # smelt/koaro: 1 = pelagic, 2 = littoral, trout: 1 = smelt, 2 = koaro
     stage::Int64                      # 0 = juvenile, 1 = adult
-    growth_rate::Float64              # growth rate
-    size_mature::Float64              # size individual transitions from juv to adult
-    fecundity_mean::Int64             # mean number larvae produced
-    fecundity_sd::Int64               # SD number larvae produced
 end
+
+# Agent types
+Smelt(id, pos, energy, length, stage) = Fish(id, pos, :smelt, energy, length, stage)
+Koaro(id, pos, energy, length, stage) = Fish(id, pos, :koaro, energy, length, stage)
+Trout(id, pos, energy, length, stage) = Fish(id, pos, :trout, energy, length, stage)
+
+
+# Model properties - somewhere to store params - using mutable struct as mixed types, params defined below
+Base.@kwdef mutable struct Parameters
+    swim_walkmap::BitArray
+    waterfinder::AStar
+    heightmap2::Matrix{Int64}
+	basal_resource::Array{Float64,3}
+	basal_resource_type::Array{Int64,3}
+	res_grow_r_lit::Float64
+    res_grow_r_pel::Float64
+    res_k_lit::Float64
+    res_k_pel::Float64
+    Δenergy_smelt::Float64
+    consume_amount_smelt::Float64
+    breed_prob_smelt::Float64     
+    breed_mortality_smelt::Float64 
+    growth_rate_smelt::Float64     
+    length_mean_smelt::Float64
+    length_sd_smelt::Float64
+    vision_smelt::Int64
+    n_juv_mean_smelt::Int64
+    n_juv_sd_smelt::Int64
+    size_maturity_smelt::Float64
+    mortality_random_smelt::Float64
+    resource_pref_adult_smelt::Float64
+    resource_pref_juv_smelt::Float64
+    size_mature_smelt::Float64
+    fecundity_mean_smelt::Int64      
+    fecundity_sd_smelt::Int64
+    tick::Int64
+end
+
 
 # initialize model --------------------------------------------------------------------------
-# note - starting out with just smelt/pelagic, will need variables below for koaro and trout and littoral
 
 function initialize_model(;
-    dims = (15, 15, 15),                  # grid size
-    cell_resource_growth_lit = 0.5,    # cell resource growth rate - littoral resources - draw from distribution?
-    cell_resource_growth_pel = 0.5,    # cell resource growth rate - pelagic resources - draw from distribution?
-    cell_resource_k_lit = 100.0,        # cell resource carrying capacity - littoral - draw from distribution?
-    cell_resource_k_pel = 50.0,        # cell resource carrying capacity - littoral - draw from distribution?
-    n_smelt = 1,                      # initial number of smelt
-    Δenergy_smelt = 5.0,              # energy gained from eating resource - draw from distribution?
-    consume_amount_smelt = 5.0,       # max amount consumed in 1 timestep - draw from distribution?
-    breed_prob_smelt = 0.0,           # probability of spawning (during seasonal window only) - draw from distribution?
-    breed_mortality_smelt = 0.5,      # probability of dying after spawning - draw from distribution?
-    growth_rate_smelt = 1.0,          # mm growth / time step - draw from distribution?
-    length_mean_smelt = 15.0,         # mean adult smelt length - used for setting initial lengths
-    length_sd_smelt = 1.0,            # SD adult smelt length - used for setting initial lengths
-    vision_smelt = 1,                 # number of cells smelt can "see"
-    n_juv_mean_smelt = 100,          # mean number of juveniles produced by 1 female (note this is juveniles, not eggs)
-    n_juv_sd_smelt = 10,             # SD number of juveniles produced by 1 female (note this is juveniles, not eggs)
+    # dims = (15, 15, 15),              # grid size
+    lake_url = "data\\taupo_500m.csv",  # lake data
+    max_littoral_depth = 50,            # how far down does the littoral go in meters
+    res_grow_r_lit = 0.01,              # cell resource growth rate - littoral resources - draw from distribution?
+    res_grow_r_pel = 0.01,              # cell resource growth rate - pelagic resources - draw from distribution?
+    res_k_lit = 100.0,                  # cell resource carrying capacity - littoral - draw from distribution?
+    res_k_pel = 50.0,                   # cell resource carrying capacity - littoral - draw from distribution?
+    n_smelt = 5,                        # initial number of smelt
+    n_koaro = 5,                        # initial number of smelt
+    n_trout = 5,                        # initial number of smelt
+    Δenergy_smelt = 5.0,                # energy gained from eating resource - draw from distribution?
+    consume_amount_smelt = 10.0,        # max amount consumed in 1 timestep - draw from distribution?
+    breed_prob_smelt = 0.0,             # probability of spawning (during seasonal window only) - draw from distribution?
+    breed_mortality_smelt = 0.5,        # probability of dying after spawning - draw from distribution?
+    growth_rate_smelt = 1.0,            # mm growth / time step - draw from distribution?
+    length_mean_smelt = 15.0,           # mean adult smelt length - used for setting initial lengths
+    length_sd_smelt = 1.0,              # SD adult smelt length - used for setting initial lengths
+    vision_smelt = 1,                   # number of cells smelt can "see"
+    n_juv_mean_smelt = 100,             # mean number of juveniles produced by 1 female (note this is juveniles, not eggs)
+    n_juv_sd_smelt = 10,                # SD number of juveniles produced by 1 female (note this is juveniles, not eggs)
     size_maturity_smelt = 10.0,         # size (mm) when smelt transition from juvenile to adult
     mortality_random_smelt = 0.0001,    # probability of random mortality each timestep - draw from distribution?
-    resource_pref_adult_smelt = 0.99,  # adult smelt preference for (1) pelagic (0) littoral resources - but if koaro larvae present consume them
-    resource_pref_juv_smelt = 0.99,    # juvenile preference for pelagic (1) or littoral (0) resources
-    stage = 1,
-    seed = 23182,
+    resource_pref_adult_smelt = 0.99,   # adult smelt preference for (1) pelagic (0) littoral resources - but if koaro larvae present consume them
+    resource_pref_juv_smelt = 0.99,     # juvenile preference for pelagic (1) or littoral (0) resources
+    size_mature_smelt = 20.0,           # length (mm) when smelt can reproduce
+    fecundity_mean_smelt = 100,         # mean number larvae produced
+    fecundity_sd_smelt  = 10,           # SD number larvae produced
+    seed = 23182,                       # rng seed
 )
 
+# define rng 
 rng = MersenneTwister(seed)
-space = GridSpace(dims, periodic = false)
 
-# define littoral/pelagic matrix (1 = pelagic 0 = littoral)
-m1_add = 1
-m1 = zeros(Int, dims)
-m1[size(m1, 1) - m1_add:size(m1, 1), :,:] .= 1
-m1[1:1 + m1_add, :,:] .= 1
-m1[:, size(m1, 2) - m1_add:size(m1, 2),:] .= 1
-m1[:, 1:1 + m1_add, :] .= 1
+ # load lake topology ----------------------------------------------------------
+ lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
 
+ # convert to integer
+ heightmap = floor.(Int, convert.(Float64, lake_mtx))
 
+ # rescale so that there aren't negative depth values (the deepest point in the lake = 1)
+ heightmap2 = heightmap .+ abs(minimum(heightmap)) .+ 1
+ heightmap2 .= heightmap .* -1
+ # -------------------------------------------------
 
-# Model properties
-properties = Dict(
-    :basal_resource => zeros(Float64, dims),
-    :basal_resource_type => m1,
-    :cell_resource_growth_lit => cell_resource_growth_lit::Float64,
-    :cell_resource_growth_pel => cell_resource_growth_pel::Float64,
-    :cell_resource_k_lit => cell_resource_k_lit::Float64,
-    :cell_resource_k_pel => cell_resource_k_pel::Float64,
-    :tick => 1::Int64,
-    )
+ # lake depth 
+ mx_dpth = maximum(heightmap2)
 
-model = ABM(Smelt, space;
-    properties, rng, scheduler = Schedulers.randomly, warn = false
-)
+ # create new lake_type variable -----------------------------------------------
+ # 1 = littoral, 0 = pelagic
+ lake_type = ones(Int, size(heightmap2))
+ lake_type .= heightmap2
 
-# Add agents - need to figure out how to add different types of agents
-for _ in 1:n_smelt
-    #=
-    energy = rand(model.rng, 1:(Δenergy_smelt*2)) - 1
-    Δenergy = Δenergy_smelt
-    reproduction = breed_prob_smelt
-    consume_amount = consume_amount_smelt
-    length = round(rand(Normal(length_mean_smelt, length_sd_smelt), 1)[1], digits = 3)
-    vision_range = vision_smelt
-    mortality_random = mortality_random_smelt
-    mortality_reproduction = breed_mortality_smelt
-    resource_pref_adult = resource_pref_adult_smelt
-    resource_pref_juv = resource_pref_juv_smelt
-    stage = stage
-    growth_rate = growth_rate_smelt
-    size_mature = size_maturity_smelt
-    fecundity_mean = n_juv_mean_smelt
-    fecundity_sd = n_juv_sd_smelt
+ # if take_type (depth) is between 0 and max_littoral_depth cell is littoral
+ lake_type[lake_type .> -1 .&& lake_type .< (max_littoral_depth + 1)] .= 1
 
-    =#
+ # if lake is deeper than max_littoral_depth cell is pelagic
+ lake_type[lake_type .> max_littoral_depth] .= 0
 
-    # params here must be in the same order as the @agent section above
-   # add_agent!(Smelt, model, energy, Δenergy, reproduction, consume_amount, length, vision_range, mortality_random,
-    #           mortality_reproduction, resource_pref_adult, resource_pref_juv, stage, growth_rate, size_mature, fecundity_mean, fecundity_sd)
+ # set limits between which agents can exist (surface and lake bed) ----------------
+ lake_surface_level = mx_dpth
+ lake_floor = 0
+ 
+ # lake dimensions ---------------------------------------------------------
+ dims = (size(heightmap2)..., mx_dpth)
 
+ # 3d version of lake type, used for indexing
+ basal_resource_type = repeat(lake_type, 1,1, dims[3])
 
+ # Note that the dimensions of the space do not have to correspond to the dimensions of the heightmap ... dont understand how this works... 
+ # might only be for continuous spaces
+ space = GridSpace(dims, periodic = false)
 
-               add_agent_pos!(
-                Smelt(
-                    nextid(model), ## Using `nextid` prevents us from having to manually keep track # of animal IDs
-                    random_position(model),
-                    rand(model.rng, 1:(Δenergy_smelt*2)) - 1,
-                    Δenergy_smelt,
-                    breed_prob_smelt,
-                    consume_amount_smelt,
-                    round(rand(Normal(length_mean_smelt, length_sd_smelt), 1)[1], digits = 3),
-                    vision_smelt,
-                    mortality_random_smelt,
-                    breed_mortality_smelt,
-                    resource_pref_adult_smelt,
-                    resource_pref_juv_smelt,
-                    stage,
-                    growth_rate_smelt,
-                    size_maturity_smelt,
-                    n_juv_mean_smelt,
-                    n_juv_sd_smelt,
-                ),
-                model,
-            )
+ #  swimable space ----------------------------------------------------
+ swim_walkmap = BitArray(falses(dims...))
 
-
-
+ # fish can swim at any depth between the lake bed and lake suface
+ for i in 1:dims[1], j in 1:dims[2]
+    if lake_floor < heightmap2[i, j] < lake_surface_level
+        swim_walkmap[i, j, (lake_surface_level -  heightmap2[i,j]):lake_surface_level] .= true
+    end
 end
 
+# create lake resource array
+basal_resource = zeros(dims)
 
-# Add basal resource at random initial levels - do seperately for pelagic and littoral?
-for p in positions(model)
-    #model.basal_resource[p...] = 0.0
-    model.basal_resource[p...] = rand(model.rng, 5:cell_resource_k_pel) - 1
+# populate with basal resource
+# this is a 3d array, where each matrix slice is x/y and the z dim is depth 
+for i in 1:dims[1], j in 1:dims[2]
+   if lake_type[i,j] == 0    # initial pelagic resource amount - 
+       basal_resource[i, j, 1:mx_dpth] .= (res_k_pel / 5.0) 
+   end
+   if lake_type[i,j] == 1 # initial littoral  resource amount
+       basal_resource[i, j, 1:mx_dpth] .= (res_k_lit / 5.0) 
+   end
+end
+
+# define the properties
+properties = Parameters(
+    swim_walkmap,
+    AStar(space; walkmap = swim_walkmap, diagonal_movement = true),
+    heightmap2,
+    basal_resource,
+    basal_resource_type,
+    res_grow_r_lit,
+    res_grow_r_pel,
+    res_k_lit,
+    res_k_pel,
+    Δenergy_smelt,
+    consume_amount_smelt,
+    breed_prob_smelt,     
+    breed_mortality_smelt,
+    growth_rate_smelt,
+    length_mean_smelt,
+    length_sd_smelt, 
+    vision_smelt,
+    n_juv_mean_smelt,
+    n_juv_sd_smelt,
+    size_maturity_smelt, 
+    mortality_random_smelt,
+    resource_pref_adult_smelt,
+    resource_pref_juv_smelt,
+    size_mature_smelt,
+    fecundity_mean_smelt,
+    fecundity_sd_smelt,
+    1)
+
+# define model
+model = ABM(Fish, space; properties, rng, scheduler = Schedulers.randomly, warn = false)
+
+# define a normal distribution - used to determine inital fish length for smelt
+sm_sz = Normal(model.length_mean_smelt, model.length_sd_smelt)
+
+# Add agents ---------------------
+# Add smelt
+for _ in 1:n_smelt
+               add_agent_pos!(
+                Smelt(
+                    nextid(model),                             # Using `nextid` prevents us from having to manually keep track # of animal IDs
+                    random_walkable(model, model.waterfinder),
+                    rand(model.rng, 1:100) - 1,                 # Fish starting energy level - somewhere between 1 and 99
+                    round(rand(sm_sz), digits = 3),             # initial length
+                    1),                                         # initial stage 
+                model,
+            )
+end
+
+# Add koaro
+for _ in 1:n_koaro
+    add_agent_pos!(
+     Koaro(
+         nextid(model),                             # Using `nextid` prevents us from having to manually keep track # of animal IDs
+         random_walkable(model, model.waterfinder),
+         rand(model.rng, 1:100) - 1,                 # Fish starting energy level - somewhere between 1 and 99
+         round(rand(sm_sz), digits = 3),             # initial length
+         1),                                         # initial stage 
+     model,
+ )
+end
+
+# Add trout
+for _ in 1:n_trout
+    add_agent_pos!(
+     Trout(
+         nextid(model),                             # Using `nextid` prevents us from having to manually keep track # of animal IDs
+         random_walkable(model, model.waterfinder),
+         rand(model.rng, 1:100) - 1,                 # Fish starting energy level - somewhere between 1 and 99
+         round(rand(sm_sz), digits = 3),             # initial length
+         1),                                         # initial stage 
+     model,
+ )
 end
 
 return model
 end
 
-
 sheepwolfgrass = initialize_model() 
+
+
+# Fish movement - set up seperately for each species ---------------------------------------------------
+function fish_step!(fish, model)
+    if fish.type == :smelt
+        smelt_step!(fish, model)
+   # elseif fish.type == :koaro
+    #    koaro_step!(fish, model)
+    #else
+     #   trout_step!(fish, model)
+    end
+end
+
 
 
 
 
 # define agent movement --------------------------------------------------------------------------
-function sheepwolf_step!(smelt::Smelt, model)
 
+# Smelt movement ---------
+function smelt_step!(smelt::Fish, model)
 
     # check if current pos has resources, - will need to update to check if predator is present 
-    
+    # if current cell has resources (and no predator) don't do anything 
+
     # check resources in current pos, if none, move
-     if model.basal_resource[smelt.pos...] < 1
+     if model.basal_resource[smelt.pos...] < 1.0
 
         # get id of near cells - vision_range = range agent can "see"
-        near_cells = nearby_positions(smelt.pos, model, smelt.vision_range)
+        near_cells = nearby_positions(smelt.pos, model, model.vision_smelt)
         
         # storage
-        grassy_cells = [] # do I need to predefine the type here?
-        
-        # find which of the nearby cells have resources
+        swimable_cells = []
+    
+        # find which of the nearby cells are allowed to be moved into
         for cell in near_cells
-            # is basal_resource > 0?
-            if model.basal_resource[cell...] > 0
-                # if yes, store cell ID
-                push!(grassy_cells, cell)
+            if model.swim_walkmap[cell...] > 0 && model.basal_resource[cell...] > 1.0
+                push!(swimable_cells, cell)
             end
         end
 
         # if there is a neighbouring cell with resources > 0, randomly select one to move to
-        if length(grassy_cells) > 0
+        if length(swimable_cells) > 0
 
             # First, determine if near cells are pel or lit and generate a vector of weights
             # get resource type for grassy cells
-            ind1  = [model.basal_resource_type[t...] for t in grassy_cells]
+            ind1  = [model.basal_resource_type[t...] for t in swimable_cells]
             ind1 = convert(Array{Float64, 1}, ind1)
 
             # pel and lit weights
-            pel_p = smelt.resource_pref_adult
+            pel_p = model.resource_pref_adult_smelt
             lit_p = 1.0 - pel_p
 
             # convert pel/lit indicies to weights
@@ -192,36 +322,48 @@ function sheepwolf_step!(smelt::Smelt, model)
             ind1[ind1 .== 1.0] .= lit_p
 
             # randomly choose one of the nearby cells with resources
-            m_to = sample(grassy_cells, Weights(ind1))
-
+            m_to = sample(swimable_cells, Weights(ind1))
 
             # move
             move_agent!(smelt, m_to, model)
         else
             # if none of the near cells have resources, just pick one at random - NO LITTORAL/PELAGIC PREFERENCE
-            near_cells = nearby_positions(smelt.pos, model, smelt.vision_range)
-            walk!(smelt, sample(near_cells.itr.iter, 1)[1], model)
+            swimable_cells = []
+    
+            # find which of the nearby cells are allowed to be moved onto
+            for cell in near_cells
+                if model.swim_walkmap[cell...] > 0
+                    push!(swimable_cells, cell)
+                end
+            end
+
+            # NEED TO TEST THIS  -set all resources to 0 and see what happens
+            move_agent!(smelt, sample(swimable_cells), model)
+            #walk!(smelt, sample(near_cells.itr.iter, 1)[1], model)
         end
     end 
 
     # smelt loose energy after each step
-    smelt.energy -= 4.0
+    #smelt.energy -= 4.0
 
     #  if < 0.5 die
-    if smelt.energy < 0.5
-        kill_agent!(smelt, model)
-        return
-    end
+    #if smelt.energy < 0.5
+    #    remove_agent!(smelt, model)
+    #    return
+    #end
 
     # smelt eating - see function below
-    eat!(smelt, model)
+    smelt_eat!(smelt, model)
 
     # reproduction every 5 ticks - just for testing
+   
+   #=
     if mod(model.tick, 5) == 0
         #if rand(model.rng) ≤ smelt.reproduction_prob
-        reproduce_smelt!(smelt, model)
+        reproduce_smelt!(model)
         #end
     end
+    =#
 
  # adults die based on probability - high for testing - will this kill all agents or is it run run for each agent?
    # if rand(model.rng) < smelt.mortality_random
@@ -231,164 +373,190 @@ function sheepwolf_step!(smelt::Smelt, model)
    # if smelt.length > 50.0
    #     kill_agent!(smelt, model)
    # end
-
-
 end
-
-
 
 # define agent eating -----------------------------------------------------------------------------
-function eat!(smelt::Smelt, model)
-    if model.basal_resource[smelt.pos...] > 0       # if there are rsources available 
-        smelt.energy += smelt.Δenergy               # give smelt energy
-        smelt.length += smelt.Δenergy               # grow smelt
-        model.basal_resource[smelt.pos...] -= smelt.consume_amount   # and reduce resources
-        # currently resources can go negative ... fix
-    end
-    return
-end
 
-# define agent reproduction --------------------------------------------------------------------------
-# smlet reproduction and post reproduction mortality
-function reproduce_smelt!(agent::A, model) where {A}
-    id = nextid(model)
-    length = 12
-    energy = 10.0
-    Δenergy = agent.Δenergy
-    stage = 0
-    offspring = A(id, agent.pos, energy, Δenergy, agent.reproduction, agent.consume_amount, length,
-    agent.vision_range, agent.mortality_random, agent.mortality_reproduction, agent.resource_pref_adult,
-    agent.resource_pref_juv, stage, agent.growth_rate, agent.size_mature, agent.fecundity_mean, agent.fecundity_sd)
+# smelt eat
+function smelt_eat!(smelt::Fish, model)
 
+    if model.basal_resource[smelt.pos...] > 1.0     # if there are resources available 
+        
+        # reduce resource amount - reduces resource by "consume_amount", unless less than that amount exists, then consume all
+        fut_res = model.basal_resource[smelt.pos...] -= model.consume_amount_smelt
 
-    # adding the agent  - should be added to pelagic
-    add_agent_pos!(offspring, model)
-
-    return
-end
-
-
-# define model counter --------------------------------------------------------------------------------
-
-# grow resources - currently just add a fixed amount each timestep, and if we go over K, remove any excess
-# next step is to change to discrete time logistic growth
-
-# (1 = pelagic 0 = littoral)
-function grass_step!(model)
-    for p in positions(model)
-
-        # first do pelagic resources
-        if model.basal_resource_type[p...] == 1
-            model.basal_resource[p...] += model.cell_resource_growth_pel
-            
-            if model.basal_resource[p...] > model.cell_resource_k_pel
-                model.basal_resource[p...] = model.cell_resource_k_pel
-            end
-        # then littoral resources
+        if fut_res < 0.0 
+            model.basal_resource[smelt.pos...] -= abs(fut_res)
+            smelt.energy += abs(fut_res)                   # give smelt energy
+            smelt.length += abs(fut_res)                   # grow smelt
         else
-            model.basal_resource[p...] += model.cell_resource_growth_pel
-            if model.basal_resource[p...] > model.cell_resource_k_lit
-                model.basal_resource[p...] = model.cell_resource_k_lit
-            end
+            model.basal_resource[smelt.pos...] -= model.consume_amount_smelt
+            smelt.energy += model.consume_amount_smelt                 # give smelt energy
+            smelt.length += model.consume_amount_smelt                # grow smelt
+            
         end
     end
+    return
+end
+
+# koaro eat
+function koaro_eat!(koaro::Fish, model)
+
+    if model.basal_resource[koaro.pos...] > 1.0     # if there are rsources available 
+        
+        # reduce resource amount - reduces resource by "consume_amount", unless less than that amount exists, then consume all
+        fut_res = model.basal_resource[koaro.pos...] - model.consume_amount_koaro
+
+        if fut_res < 0.0 
+            model.basal_resource[koaro.pos...] -= abs(fut_res)
+            koaro.energy += abs(fut_res)                   # give koaro energy
+            koaro.length += abs(fut_res)                   # grow koaro
+        else
+            model.basal_resource[koaro.pos...] -= model.consume_amount_koaro
+            koaro.energy += model.consume_amount_koaro              # give koaro energy
+            koaro.length += model.consume_amount_koaro             # grow koaro
+            
+        end
+    end
+    return
+end
+
+
+
+# trout eat --- TO DO ----------------
+# --------------------------------------
+
+
+
+# define agent reproduction --------------------------------------------------------------------------
+# smelt reproduction ADD POST REPRODUCTION MORTLITY
+
+function reproduce_smelt!(model)
+
+    # how many juvs to add?
+    fecund_smelt = Normal(model.n_juv_mean_smelt, model.n_juv_sd_smelt)
+    n_juv = round(rand(fecund_smelt), digits = 1)
+    
+    for _ in 1:n_juv
+        add_agent_pos!(
+         Smelt(
+             nextid(model),                               # Using `nextid` prevents us from having to manually keep track # of animal IDs
+             random_walkable(model, model.waterfinder),
+             rand(model.rng, 1:20) - 1,                   # Fish starting energy level - somewhere between 1 and 99
+             2,                                           # initial length 2 mm
+             0),                                          # initial stage juv
+         model,
+     )
+    end
+end
+
+
+
+# define cell resource growth  --------------------------------------------------------------------------------
+# follows discrete time logistic growth
+
+function grass_step!(model)
+
+    # pelagic
+    growable_pel = view(
+        model.basal_resource,
+        model.basal_resource_type .== 0,
+    )
+    growable_pel .= growable_pel .+ (model.res_grow_r_pel .* growable_pel .* (1.0 .- (growable_pel ./ model.res_grow_r_pel)))
+
+    # littoral
+    growable_lit = view(
+        model.basal_resource,
+        model.basal_resource_type .== 1,
+    )
+    growable_lit .= growable_lit .+ (model.res_grow_r_lit .* growable_lit .* (1.0 .- (growable_lit ./ model.res_k_lit)))
+
+    # model counter
     model.tick += 1
 end
 
 
 
 # define plotting vars -----------------------------------------------------------------------------
-offset(a) = a isa Smelt ? (-0.1, -0.1*rand()) : (+0.1, +0.1*rand())
-set(a) = a isa Smelt ? (-0.1, -0.1*rand()) : (+0.1, +0.1*rand())
-ashape(a) = a isa Smelt ? :circle : :utriangle
-acolor(a) = a isa Smelt ? RGBf(rand(3)...) : RGBAf(0.2, 0.2, 0.3, 0.8)
+# plotting params -------------------------------------------------------------------------
 
-grasscolor(model) = model.basal_resource
-heatkwargs = (colormap = [:green, :brown], colorrange = (0, 50))
+
+
+# agnt colours
+animalcolor(a) =
+if a.type == :trout
+        :yellow
+elseif a.type == :koaro
+        :red
+else
+        :blue
+end
+
 
 plotkwargs = (;
-    #ac = acolor,
-    ac = :red,
-    as = 25,
-    am = ashape,
-    offset,
-    scatterkwargs = (strokewidth = 1.0, strokecolor = :black),
-    heatarray = grasscolor,
-    heatkwargs = heatkwargs,
+    ac = animalcolor,
+    as = 2,
+    am = :circle,
 )
 
+sheepwolfgrass = initialize_model(seed = 22) 
 
-# initialize model -----------------------------------------------------------------------------------
+# interactive plot ------------------------------------------------------------------------
 
-sheepwolfgrass = initialize_model()
+# forces GLMakie to open a seperate plot window, rather than using 
+# the VSCode plotting window ... needed for interactive plots
+GLMakie.activate!(inline=false)
 
 fig, ax, abmobs = abmplot(sheepwolfgrass;
-    agent_step! = sheepwolf_step!,
+    agent_step! = fish_step!,
     model_step! = grass_step!,
 plotkwargs...)
+
 fig
-
-
-# interactive plotting ------------------------------------------------------------------------------------
-#=sheepwolfgrass = initialize_model()
-
-# define sliders
-params = Dict(:n_smelt => 1:8)
-
-fig, ax, abmobs = abmplot(sheepwolfgrass;
-agent_step! = sheepwolf_step!,
-model_step! = grass_step!,
-    params, plotkwargs...)
-fig
-=#
 
 # data collection -------------------------------------------------------------------------------------
 
-sheepwolfgrass = initialize_model()
-steps = 10
-adata = [:pos, :energy, :Δenergy, :reproduction, :consume_amount, :length, :vision_range, :mortality_random,
-:mortality_reproduction, :resource_pref_adult, :resource_pref_juv, :stage, :growth_rate, :size_mature, :fecundity_mean, :fecundity_sd]
-mdata = [:basal_resource, :basal_resource_type, :tick, :cell_resource_growth_pel, :cell_resource_growth_lit]
+sheepwolfgrass = initialize_model(res_grow_r_lit = 0.05, res_grow_r_pel = 0.05)
+steps = 100
+adata = [:pos, :energy, :length, :type]
+
+mdata = [:basal_resource, :basal_resource_type, :tick]
 
 # obtainer = copy - use this if you need to update the mdf output - by default if the output is mutable container it 
 # won't show updates. using obtainer = copy will reduce performance, only use for prototyping 
-adf, mdf = run!(sheepwolfgrass, sheepwolf_step!, grass_step!, steps; adata, mdata, obtainer = deepcopy)
+adf, mdf = run!(sheepwolfgrass, fish_step!, grass_step!, steps; adata, mdata, obtainer = deepcopy)
 
-
-adf
 
 mdf
 
-mdf[:,3][1] 
 
-mdf[:,2][1] 
-mdf[:,2][2] 
-mdf[:,2][3] 
-mdf[:,2][4] 
-mdf[:,2][10] 
+mdf[1,2]
 
 
-xx = mdf[:,2][1]
-xx
+# plot basl resources at a single depth
+pltm = mdf[5,2]
+pltm1 = pltm[:,:,5]
 
+using Plots
 
-
-filter(row -> row.id == 1, adf)
-
-
-
+Plots.heatmap(1:size(pltm1,2),
+        1:size(pltm1,1),
+        pltm1,
+    c=cgrad([:blue, :yellow]),
+    xlabel="x values", ylabel="y values"
+)
 
 
 
-dims = (5,5,5)
+
+# basal resources
 
 
-m1_add = 1
-m1 = zeros(Int, dims)
-m1[size(m1, 1) - m1_add:size(m1, 1), :,:] .= 1
-m1[1:1 + m1_add, :,:] .= 1
-m1[:, size(m1, 2) - m1_add:size(m1, 2),:] .= 1
-m1[:, 1:1 + m1_add, :] .= 1
+# plot basal resourse in a single cell through time
+
+y = [mdf[i,2][5,10,1] for i in axes(mdf,1)]
+x = 1:length(y)
+
+Plots.plot(x, y)
 
 
-m1

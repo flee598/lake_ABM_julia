@@ -4,6 +4,10 @@ using Distributions
 using InteractiveDynamics
 using GLMakie
 
+# forces GLMakie to open a seperate plot window, rather than using 
+# the VSCode plotting window ... needed for interactive plots
+GLMakie.activate!(inline=false)
+
 # sheep traits
 @agent Sheep GridAgent{2} begin
     energy::Float64
@@ -52,7 +56,7 @@ end
 
 # move sheep
 function sheepwolf_step!(sheep::Sheep, model)
-walk!(sheep, rand, model)
+    randomwalk!(sheep, model)
 end
 
  # do something to grass
@@ -78,16 +82,11 @@ plotkwargs = (;
 
 sheepwolfgrass = initialize_model()
 
-# parameter I want on a slider
-params = Dict(
-    :n_sheep => 1:20,
-)
 
-
+# plot
 fig, ax, abmobs = abmplot(sheepwolfgrass;
     agent_step! = sheepwolf_step!,
     model_step! = grass_step!,
-    params,
-plotkwargs...)
+    plotkwargs...)
 fig
 
