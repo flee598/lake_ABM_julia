@@ -105,7 +105,7 @@ function initialize_model(;
     consume_amount_smelt = 10.0,        # max amount consumed in 1 timestep - draw from distribution?
     consume_amount_koaro = 10.0,         # max amount consumed in 1 timestep - draw from distribution?
     breed_prob_smelt = 0.0,             # probability of spawning (during seasonal window only) - draw from distribution?
-    breed_mortality_smelt = 0.5,        # probability of dying after spawning - draw from distribution?
+    breed_mortality_smelt = 0.95,        # probability of dying after spawning - draw from distribution?
     growth_rate_smelt = 1.0,            # mm growth / time step - draw from distribution?
     length_mean_smelt = 15.0,           # mean adult smelt length - used for setting initial lengths
     length_sd_smelt = 1.0,              # SD adult smelt length - used for setting initial lengths
@@ -114,14 +114,14 @@ function initialize_model(;
     n_juv_mean_smelt = 100,             # mean number of juveniles produced by 1 female (note this is juveniles, not eggs)
     n_juv_sd_smelt = 10,                # SD number of juveniles produced by 1 female (note this is juveniles, not eggs)
     size_maturity_smelt = 10.0,         # size (mm) when smelt transition from juvenile to adult
-    mortality_random_smelt = 0.0001,    # probability of random mortality each timestep - draw from distribution?
+    mortality_random_smelt = 0.01/365,    # probability of random mortality each timestep
     resource_pref_adult_smelt = 0.99,   # adult smelt preference for (1) pelagic (0) littoral resources - but if koaro larvae present consume them
     resource_pref_juv_smelt = 0.99,     # juvenile preference for pelagic (1) or littoral (0) resources
     resource_pref_adult_koaro = 0.01,   # adult koaro preference for (1) pelagic (0) littoral resources 
     resource_pref_juv_koaro = 0.99,     # juv koaro preference for (1) pelagic (0) littoral resources 
     size_mature_smelt = 20.0,           # length (mm) when smelt can reproduce
-    fecundity_mean_smelt = 100,         # mean number larvae produced
-    fecundity_sd_smelt  = 10,           # SD number larvae produced
+    fecundity_mean_smelt = 3,         # mean number larvae produced
+    fecundity_sd_smelt  = 0.2,           # SD number larvae produced
     seed = 23182,                       # rng seed
 )
 
@@ -252,7 +252,7 @@ for _ in 1:n_koaro
          random_walkable(model, model.waterfinder),  # random initial position
          rand(model.rng, 1:100) - 1,                 # Fish starting energy level
          #round(rand(sm_sz), digits = 3),             # initial length
-         2.0,                                          # initial length - TESTING
+         15.0,                                          # initial length - TESTING
          1),                                           # initial stage 
      model,
  )
@@ -311,10 +311,7 @@ function smelt_step!(smelt::Fish, model)
    
      # if no prey koaro nearby, or smelt is juv look for cell resources
      # check if current pos has resources
-     # if current cell has resources (and no predator) don't do anything 
-     # check resources in current pos, if none, move
-     
-        
+     # if current cell has resources (and no predator) don't do anything if none, move
     elseif model.basal_resource[smelt.pos...] < 100.0                          # TESTING VALUE
 
         # get id of near cells - vision_range = range agent can "see"
@@ -367,43 +364,49 @@ function smelt_step!(smelt::Fish, model)
                 end
             end
 
-            # NEED TO TEST THIS  -set all resources to 0 and see what happens
+            # NEED TO TEST THIS - set all resources to 0 and see what happens
             move_agent!(smelt, sample(swimable_cells), model)
-            #walk!(smelt, sample(near_cells.itr.iter, 1)[1], model)
         end
     end 
-
-    # smelt loose energy after each step
-    #smelt.energy -= 4.0
-
-    #  if < 0.5 die
-    #if smelt.energy < 0.5
-    #    remove_agent!(smelt, model)
-    #    return
-    #end
 
     # smelt eating - see function below
     smelt_eat!(smelt, model)
 
+
+
     # reproduction every 5 ticks - just for testing
-   
-   #=
-    if mod(model.tick, 5) == 0
+    # in reality it will need to be between days 300 - 360 for example
+
+    if mod(model.tick, 5) == 0 &&  smelt.length > 40.0                       # TESTING VALUE
         #if rand(model.rng) ≤ smelt.reproduction_prob
-        reproduce_smelt!(model)
+        reproduce_smelt!(smelt, model)
         #end
     end
-    =#
 
- # adults die based on probability - high for testing - will this kill all agents or is it run run for each agent?
-   # if rand(model.rng) < smelt.mortality_random
-   #     kill_agent!(smelt, model)
-   # end
 
-   # if smelt.length > 50.0
-   #     kill_agent!(smelt, model)
-   # end
+    # smelt loose energy after each step
+    smelt.energy -= 0.001                                                    # TESTING VALUE
+
+    # if energy < 0.1 die - if there are very little resources smelt starve
+    if smelt.energy < 1.0
+        remove_agent!(smelt, model)
+        return
+    end
+
+    # adults die based on random probability
+    if rand(model.rng) < model.mortality_random_smelt
+        remove_agent!(smelt, model)
+    end
+
+   # either implemnt age or size based motality? might not need if we have random mortality...
+   #if smelt.length > 50.0
+   #    kill_agent!(smelt, model)
+   #end
+
+
 end
+
+
 
 
 # koaro movement ----------------------
@@ -506,12 +509,8 @@ function koaro_step!(koaro::Fish, model)
    # end
 end
 
-
+5+5
 # trout movement --- TO DO ----------------
-
-
-
-
 
 
 # define agent eating -----------------------------------------------------------------------------
@@ -519,47 +518,34 @@ end
 # smelt eat - koaro larvae, then cell resources
 function smelt_eat!(smelt::Fish, model)
 
-    # testing - see if agents in postiion can be used inside remove_agents
-   # remove_agent!(agents_in_position(smelt, model), model)
-    
-    # die_it = collect(ids_in_position(smelt, model))
-
+    # check if there is koaro fry in current cell, if so eat them
     food = [x for x in agents_in_position(smelt, model) if x.type == :koaro && x.length < 10.0]
     die_it = collect(food)
-
-    for i in die_it
-        remove_agent!(i, model)
-    end
     
-    #=
-    # possible prey fish in current cell
-    food = [x for x in agents_in_position(smelt, model) if x.type == :koaro && x.length < 10.0]
-
-    ids_in_position()
-
     # perference is to eat koaro fry, if not eat cell resource
-    if !isempty(food)
+    if !isempty(die_it)
 
         # determine how many koaro fry to eat (in one tick), increases with smelt size
-        if length(food)  < round(smelt.length * 1)
-            n_eat = length(food)
+        # if only a few fry presnt, eat all, otherwise scale with smelt length
+        if length(die_it)  < round(smelt.length * 1)
+            n_eat = length(die_it)
         else
             n_eat = round(smelt.length * 1)
         end
 
-        # remove eaten koaro
-        remove_agent!(StatsBase.sample(model.rng, collect(food), n_eat, replace = false), model)
+        # remove eaten koaro 
+        remove_all!(model, StatsBase.sample(model.rng, die_it, n_eat, replace = false))
 
         # give smelt energy
-        smelt.energy +=  5.0               # n_eat * model.Δenergy_smelt
+        smelt.energy +=  (n_eat * model.Δenergy_smelt)
          
 
-        #=
-        elseif model.basal_resource[smelt.pos...] > 1.0     # if there are resources available 
+    # if there are resources available 
+    elseif model.basal_resource[smelt.pos...] > 1.0     
         
         # reduce resource amount - reduces resource by "consume_amount", unless less than that amount exists, then consume all
         fut_res = model.basal_resource[smelt.pos...] -= model.consume_amount_smelt
-
+        
         if fut_res < 0.0 
             model.basal_resource[smelt.pos...] -= abs(fut_res)
             smelt.energy += abs(fut_res)                   # give smelt energy
@@ -567,16 +553,12 @@ function smelt_eat!(smelt::Fish, model)
         else
             model.basal_resource[smelt.pos...] -= model.consume_amount_smelt
             smelt.energy += model.consume_amount_smelt                 # give smelt energy
-            smelt.length += model.consume_amount_smelt                # grow smelt
-            
+            smelt.length += model.consume_amount_smelt                 # grow smelt  
         end
-        =#
+        
     end
    # return
-            =#
-
 end
-
 
 
 # koaro eat - just cell resources
@@ -609,24 +591,33 @@ end
 # define agent reproduction ----------------------------------------------------------------------------------- TO DO
 
 # smelt reproduction
-function reproduce_smelt!(model)
+function reproduce_smelt!(smelt::Fish, model)
 
     # how many juvs to add?
-    fecund_smelt = Normal(model.n_juv_mean_smelt, model.n_juv_sd_smelt)
-    n_juv = round(rand(fecund_smelt), digits = 1)
+    sm_spwn = Normal(model.fecundity_mean_smelt, model.fecundity_sd_smelt)
+    n_juv = round(rand(sm_spwn), digits = 1)
     
+    # add fry
     for _ in 1:n_juv
         add_agent_pos!(
          Smelt(
              nextid(model),                               # Using `nextid` prevents us from having to manually keep track # of animal IDs
-             random_walkable(model, model.waterfinder),
+             random_walkable(model, model.waterfinder),   # random starting location - could make pelagic
              rand(model.rng, 1:20) - 1,                   # Fish starting energy level - somewhere between 1 and 99
              2,                                           # initial length 2 mm
              0),                                          # initial stage juv
          model,
-     )
+         )
     end
+
+    # post spwaning mortality of adult
+    if rand(model.rng) < model.breed_mortality_smelt
+        remove_agent!(smelt, model)
+    end
+
 end
+
+
 
 # koaro reproduction
 function reproduce_kaoro!(model)
@@ -738,7 +729,7 @@ fig
 # data collection -------------------------------------------------------------------------------------
 
 initialised_model = initialize_model()
-steps = 20
+steps = 10
 
 # somewhere to store results
 adata = [:pos, :energy, :length, :type]
@@ -748,13 +739,14 @@ mdata = [:basal_resource, :basal_resource_type, :tick]
 # won't show updates. using obtainer = copy will reduce performance, only use for prototyping 
 adf, mdf = run!(initialised_model, fish_step!, grass_step!, steps; adata, mdata, obtainer = deepcopy)
 
+
 # agent data
 adf
 
 adf[adf.type .== :smelt, :]
 
 
-
+5*50*50
 
 # cell data
 mdf
