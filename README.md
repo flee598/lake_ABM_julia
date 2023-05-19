@@ -3,6 +3,7 @@
 ### 3D model of a lake food web.
 
 Overview:
+
 1: generate a 3D lake environment from bathymetry data (currently csv)
 
 2: define lake cell traits (e.g. resource type (pelagic vs littoral), resource growth rate)
