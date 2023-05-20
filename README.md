@@ -10,25 +10,18 @@ Overview:
 
 3: populate lake with fish 3 species, trout (top predator), smelt and koaro (competitors that consume resources produced in cells)
 
-4: define fish movement (random in 3D, but weighted to move towards specific resource)
+4: define fish movement (random in 3D, but weighted to move towards specific resource (koaro == littoral, smelt == pelagic), trout wherever koaro and smelt are)
 
-5: define fish eat
+5: define fish eat (koaro = littoral resource preference, smelt pelagic resource preference)
 
-6: define fish reproduce
+6: define fish reproduce (all three species have a chance of reproducing during a 2 month window each year, can't reproduce outside of this)
 
-7: define fish die
+7: define fish die (high chance of death after spawning for all 3 species, also if energy gets too low, also small random chance)
 
-8: run model!
+8: define cell behaviour - resource growth (follows discrete time logistic growth equation)
 
+9: run model!
 
 
 ### To do
-trout movement
-
-koaro predation
-trout predation
-
-koaro reproduction
-trout reproduction
-
 koaro/smelt predator avoidance - can do last
