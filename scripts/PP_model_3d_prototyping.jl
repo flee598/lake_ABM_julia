@@ -134,8 +134,8 @@ end
 # Currently place holder values used for parameters
 
 function initialize_model(;
-    dims = (50, 50),                             # if we want ot use synthetic bathymetry
-    #lake_url::String = "data\\taupo_500m.csv",  # lake data
+   # dims = (50, 50),                             # if we want ot use synthetic bathymetry
+    lake_url::String = "data\\taupo_500m.csv",  # lake data
     max_littoral_depth::Int64 = 10,           # how far down does the littoral go in meters
     res_grow_r_lit::Float64 = 0.0001,              # cell resource growth rate - littoral resources - draw from distribution?
     res_grow_r_pel::Float64 = 0.0001,              # cell resource growth rate - pelagic resources - draw from distribution?
@@ -191,6 +191,8 @@ function initialize_model(;
 
     # ----------------------------------------------------
     # create synthetic heatmap - alternative to using real lake topology
+
+    #=
     heightmap2 = zeros(Int, dims)
     
     for i in 1:dims[1], j in 1:dims[2]
@@ -201,17 +203,20 @@ function initialize_model(;
         end
     end
 
-    #=
+    =#
+
+    
     # load lake topology ---------------------------------------
     lake_mtx = CSV.read(lake_url, DataFrame) |> Tables.matrix
 
     # convert to integer
     heightmap2 = floor.(Int, convert.(Float64, lake_mtx))::Matrix{Int64}
     heightmap2 .= heightmap2 .* -1
-     =#
+    # ----------------------------------------------------------- 
 
     # lake depth 
     mx_dpth = maximum(heightmap2)
+
 
     # create new lake_type variable ----------------------------
     # 1 = littoral, 0 = pelagic
@@ -331,32 +336,72 @@ function initialize_model(;
     #sm_sz = Normal(model.length_mean_smelt, model.length_sd_smelt)
 
     # Add agents -------------------------------------
+
+     # add smelt only to pelagic at the start --------------------
+        # storage
+        swimable_cells = Vector{Tuple}()
+
+        # check resources in current pos, if none, move
+        # if model.basal_resource[smelt.pos...] < 10.0
+
+            # get id of near cells - vision_range = range agent can "see"
+            near_cells = can_swim
+
+            # find which of the nearby cells are allowed to be moved into
+            for cell in near_cells
+                if swim_walkmap[cell...] > 0 && basal_resource_type[cell...] == 0
+                    push!(swimable_cells, cell)
+                end
+            end 
+    #----------------------------------------------------------------
+
+
     # Add smelt
     for _ in 1:n_smelt
                 add_agent_pos!(
                     Smelt(
-                        nextid(model),                              # Using `nextid` prevents us from having to manually keep track # of animal IDs
-                        sample(can_swim),
-                        #random_walkable(model, model.waterfinder),  # random initial position
+                        nextid(model),                               # Using `nextid` prevents us from having to manually keep track # of animal IDs
+                        #sample(can_swim),
+                        sample(swimable_cells), 
                         rand(model.rng, 10.0:100.0),                 # Fish starting energy level
                         #round(rand(sm_sz), digits = 3),             # initial length
-                        45.0,
-                        1),                                         # initial stage 
+                        45.0,                                        # initial length - TESTING
+                        1),                                          # initial stage 
                     model,
                 )
     end
+
+        # add smelt only to pelagic at the start --------------------
+                # storage
+                swimable_cells2 = Vector{Tuple}()
+
+                # check resources in current pos, if none, move
+                # if model.basal_resource[smelt.pos...] < 10.0
+
+                    # get id of near cells - vision_range = range agent can "see"
+                    near_cells = can_swim
+
+                    # find which of the nearby cells are allowed to be moved into
+                    for cell in near_cells
+                        if swim_walkmap[cell...] > 0 && basal_resource_type[cell...] == 1
+                            push!(swimable_cells2, cell)
+                        end
+                    end 
+        #----------------------------------------------------------------
+
 
     # Add koaro
     for _ in 1:n_koaro
         add_agent_pos!(
         Koaro(
             nextid(model),
-            sample(can_swim),
+            #sample(can_swim),
+            sample(swimable_cells2),
             #random_walkable(model, model.waterfinder),  # random initial position
             rand(model.rng, 10.0:100.0),                 # Fish starting energy level
-            #round(rand(sm_sz), digits = 3),            # initial length
-            45.0,                                       # initial length - TESTING
-            1),                                         # initial stage 
+            #round(rand(sm_sz), digits = 3),             # initial length
+            45.0,                                        # initial length - TESTING
+            1),                                          # initial stage 
         model,
     )
     end
@@ -368,19 +413,19 @@ function initialize_model(;
             nextid(model), 
             sample(can_swim),                            
             #random_walkable(model, model.waterfinder),  # random initial position
-            100.0,                 # Fish starting energy level
-            320.0,                                      # initial length
-            1),                                         # initial stage 
+            100.0,                                       # Fish starting energy level
+            320.0,                                       # initial length
+            1),                                          # initial stage 
         model,
     )
     end
     return model
 end
 
+
 # ---------------------------------------------------------------------------------------------------------------
 # Fish movement wrapper - set up seperately for each species ----------------------------------------------------
 # ---------------------------------------------------------------------------------------------------------------
-
 
 function fish_step!(fish::Fish, model)
     if fish.type == :smelt
@@ -623,9 +668,9 @@ function smelt_step!(smelt::Fish, model)
 
             # pel and lit weights - depends on fish size
             if smelt.length < 10.0
-                pel_res_pref = model.resource_pref_juv_koaro
+                pel_res_pref = model.resource_pref_juv_smelt
             else
-                pel_res_pref = model.resource_pref_adult_koaro
+                pel_res_pref = model.resource_pref_adult_smelt
             end
 
             # littoral weight
@@ -642,15 +687,14 @@ function smelt_step!(smelt::Fish, model)
             else
                 move_agent!(smelt, sample(model.rng, swimable_cells), model)
             end
-        else
-            
+        else # if no neighbouring cells have food, pick one at random
+
             # find which of the nearby cells are allowed to be moved onto
             for cell in near_cells
                 if model.swim_walkmap[cell...] > 0
                     push!(swimable_cells, cell)
                 end
             end
-            
             move_agent!(smelt, sample(swimable_cells), model)
         end
     #end 
@@ -681,7 +725,7 @@ function smelt_step!(smelt::Fish, model)
     #end
     
       # smelt loose energy after each step
-      smelt.energy -= 5.0                           # TESTING VALUE
+ #     smelt.energy -= 5.0                           # TESTING VALUE
       smelt.length += model.growth_rate_koaro                                   # grow smelt
 end
 
@@ -818,9 +862,9 @@ function koaro_step!(koaro::Fish, model)
     
     # reproduction --------------------------------
     # testing  every 5 ticks - just for testing
-   # if mod(model.tick, 10) == 0 && koaro.length > model.size_maturity_koaro 
-   #     kaoro_reproduce!(koaro, model)
-   # end
+    # if mod(model.tick, 10) == 0 && koaro.length > model.size_maturity_koaro 
+    #     kaoro_reproduce!(koaro, model)
+    # end
    
     if koaro.length > model.size_maturity_koaro && rand(model.rng) < model.breed_prob_koaro 
         kaoro_reproduce!(koaro, model)
@@ -832,7 +876,7 @@ function koaro_step!(koaro::Fish, model)
     #end
     
       # koaro loose energy after each step
-      koaro.energy -= 5.0                           # TESTING VALUE
+     # koaro.energy -= 5.0                           # TESTING VALUE
       koaro.length += model.growth_rate_koaro                                   # grow koaro
 end
 
@@ -961,7 +1005,7 @@ function trout_step!(trout::Fish, model)
 
     # trout loose energy after each step
     trout.length += model.growth_rate_trout
-    trout.energy -= 5.0                                                    # TESTING VALUE
+   # trout.energy -= 5.0                                                    # TESTING VALUE
 
   
 end
@@ -1065,8 +1109,9 @@ end
 # ---------------------------------------------------------------------------
 
 initialised_model = initialize_model(
-    dims = (50, 50),                    # landscape size
-    max_littoral_depth = 20,            # basal resources  
+   # dims = (50, 50),                    # landscape size
+    lake_url = "data\\taupo_500m.csv",  # lake data
+    max_littoral_depth = 50,            # basal resources  
     res_k_lit = 100.0,
     res_k_pel = 100.0,                
     res_grow_r_lit = 0.15,
@@ -1118,7 +1163,8 @@ initialised_model = initialize_model(
 )
 
 
-function plot_lines(initialised_model, steps)
+
+ function plot_lines(initialised_model, steps)
     
     # define what I want to gather data on
     smelt(a) = a.type == :smelt
@@ -1133,20 +1179,155 @@ function plot_lines(initialised_model, steps)
     
     adf, mdf = run!(initialised_model, fish_step!, resource_growth, steps; adata, mdata)
     
+    adf
+    mdf
+    
+    
+
+
     # plot
-    p1 = Plots.plot(adf[:,1],
-               [adf[:,2] adf[:,3] adf[:,4]],
+    p1 = Plots.plot(adf[:,1], 
+    [adf[:,2] adf[:,3] adf[:,4]],
                label=["smelt" "koaro" "trout"]
     )
 
     p2 = Plots.plot(adf[:,1],
     [mdf[:,2]],
     label=["resource"])
+
     Plots.plot(p1, p2, layout=(2,1))
 
 
 
 end
+
+
+
+
+
+
+
+initialised_model = initialize_model(
+    #dims = (50, 50),                    # landscape size
+    max_littoral_depth = 50,            # basal resources  
+    res_k_lit = 100.0,
+    res_k_pel = 100.0,                
+    res_grow_r_lit = 0.15,
+    res_grow_r_pel = 0.15,
+    n_smelt = 50,                      # initial fish abund
+    n_koaro = 50,
+    n_trout = 0,
+    vision_smelt = 1,                   # vision
+    vision_koaro = 1,
+    vision_trout = 1,
+    resource_pref_adult_smelt = 1.0,   # prey preference
+    resource_pref_juv_smelt = 1.0,
+    resource_pref_adult_koaro = 0.0,
+    resource_pref_juv_koaro = 0.0,
+    prey_pref_trout = 0.95,
+    consume_amount_smelt = 1.0,        # resource consumption
+    consume_amount_koaro = 1.0,
+    Δenergy_smelt = 10.0,               # energy gained
+    Δenergy_koaro = 10.0,
+    Δenergy_trout = 20.0,
+    length_mean_smelt = 25.0,           # length
+    length_sd_smelt = 0.0,
+    length_mean_koaro = 25.0,
+    length_sd_koaro = 0.0,
+    length_mean_trout = 300.0,
+    length_sd_trout = 0.0,
+    growth_rate_smelt = 1.0,            # growth rate (mm/timestep)
+    growth_rate_koaro = 1.0,
+    growth_rate_trout = 1.0,
+    size_maturity_smelt = 20.0,         # adult size
+    size_maturity_koaro = 20.0,
+    #size_maturity_trout = 300.0,
+    breed_prob_smelt = 0.003,            # breeding prob
+    breed_prob_koaro = 0.003,
+    breed_prob_trout = 0.003,
+    fecundity_mean_smelt = 10.0,         # fecundity
+    fecundity_sd_smelt  = 0.0,
+    fecundity_mean_koaro = 10.0,
+    fecundity_sd_koaro = 0.0,
+    fecundity_mean_trout = 10.0,
+    fecundity_sd_trout = 0.0,
+    breed_mortality_smelt = 0.0,        # mortality spawning
+    breed_mortality_koaro = 0.0,
+    breed_mortality_trout = 0.0,
+    mortality_random_smelt = 0.0,      # mortality random
+    mortality_random_koaro = 0.0,
+    mortality_random_trout = 0.0,
+    seed = trunc(Int, rand() * 10000)
+)
+
+
+
+adf
+
+steps = 10
+
+    
+    # define what I want to gather data on
+    smelt(a) = a.type == :smelt
+    koaro(a) = a.type == :koaro
+    trout(a) = a.type == :trout
+    energy(a) = a.energy
+    
+    # summary stats ()
+    adata = [:type, :pos]
+    mdata = [:basal_resource_type]
+    
+    adf, mdf = run!(initialised_model, fish_step!, resource_growth, steps; adata, mdata)
+    
+    adf
+    
+
+    using HDF5
+    h5write("mdf.h5", "mygroup", mdf[1, 2])
+
+    mdf[1, 2][:,:,1]
+
+    Plots.heatmap(1:64,
+        1:66,
+        mdf[1, 2][:,:,1],
+        c=cgrad([:blue,:brown]),
+        title="My title")
+
+
+        Plots.heatmap(1:64,
+        1:66,
+        mdf[1, 2][:,:,1],
+        colour = ([:blue,:brown, :green]),
+        title="My title")
+
+
+
+using DataFramesMeta
+
+   # number of species each time step
+   df_count = combine(groupby(adf, [:step, :type]), nrow => :count)
+   df_count = unstack(df_count, :type, :count)
+   df_count = df_count[:, 2:3]
+
+  p1 = Plots.plot(Matrix(df_count),
+   labels = permutedims(names(df_count)),
+   legend = :topleft)
+
+
+
+
+   # plot resuource through time
+    p2 = Plots.plot(mdf[:,1],
+    [mdf[:,2]],
+    label=["resource"])
+
+
+
+
+
+
+
+
 
 
     # note resource will be roughly 1/3 where it should be, becaus it is averaged over non-accessable (0.0) cells
@@ -1177,6 +1358,14 @@ adf, mdf = run!(initialised_model, fish_step!, resource_growth, steps; adata, md
 
 adf
 
+# convert tuple to columns 
+adf2 = transform(adf, :pos => AsTable)
+
+CSV.write("movement.csv", adf2)
+
+
+
+
 
 adf[adf.type .== :trout, :]
 
@@ -1191,10 +1380,61 @@ mdf[200, 2][:,:,1]
 # Plot movement map -----------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------------------
 
-function test_plot(initialised_model)
+initialised_model = initialize_model(
+    #dims = (5, 5),                    # landscape size
+    max_littoral_depth = 100,            # basal resources  
+    res_k_lit = 50.0,
+    res_k_pel = 50.0,                
+    res_grow_r_lit = 0.15,
+    res_grow_r_pel = 0.15,
+    n_smelt = 20,                      # initial fish abund
+    n_koaro = 20,
+    n_trout = 5,
+    vision_smelt = 1,                   # vision
+    vision_koaro = 1,
+    vision_trout = 2,
+    resource_pref_adult_smelt = 0.9,   # prey preference
+    resource_pref_juv_smelt = 0.9,
+    resource_pref_adult_koaro = 0.1,
+    resource_pref_juv_koaro = 0.1,
+    prey_pref_trout = 0.8,
+    consume_amount_smelt = 10.0,        # resource consumption
+    consume_amount_koaro = 10.0,
+    Δenergy_smelt = 10.0,               # energy gained
+    Δenergy_koaro = 10.0,
+    Δenergy_trout = 50.0,
+    length_mean_smelt = 25.0,           # length
+    length_sd_smelt = 2.0,
+    #length_mean_koaro = 25.0,
+    #length_sd_koaro = 2.0,
+    #length_mean_trout = 25.0,
+    #length_sd_trout = 2.0,
+    growth_rate_smelt = 0.5,            # growth rate (mm/timestep)
+    growth_rate_koaro = 0.2,
+    growth_rate_trout = 0.5,
+    size_maturity_smelt = 15.0,         # adult size
+    size_maturity_koaro = 10.0,
+    #size_maturity_trout
+    breed_prob_smelt = 0.0,            # breeding prob
+    breed_prob_koaro = 0.0,
+    breed_prob_trout = 0.0,
+    fecundity_mean_smelt = 2.0,         # fecundity
+    fecundity_sd_smelt  = 1.0,
+    fecundity_mean_koaro = 2.0,
+    fecundity_sd_koaro = 1.0,
+    fecundity_mean_trout = 2.0,
+    fecundity_sd_trout = 1.0,
+    breed_mortality_smelt = 0.0,        # mortality spawning
+    breed_mortality_koaro = 0.7,
+    breed_mortality_trout = 0.0,
+    mortality_random_smelt = 0.0,      # mortality random
+    mortality_random_koaro = 0.0,
+    mortality_random_trout = 0.0
+)
+
+function test_plot(initialised_model, steps = 100, n_fish_plot = 50)
 
 
-    steps = 100
     # somewhere to store results
     adata = [:pos, :energy, :length, :type]
     mdata = [:basal_resource, :basal_resource_type, :tick]
@@ -1206,7 +1446,7 @@ function test_plot(initialised_model)
 
     # plot basl resource at a random depth -----------------
     
-    step_r = 90
+    step_r = steps
     depth = 1
     plt_res = mdf[step_r,2]
     plt_res = plt_res[:,:,depth]
@@ -1219,8 +1459,8 @@ function test_plot(initialised_model)
 
 
     # plot basl resource type -------------------------------
-    pltm = mdf[5,3]
-    pltm1 = pltm[:,:,5]
+    pltm = mdf[1,3]
+    pltm1 = pltm[:,:, 5]
 
     # convert land cells to -1
     pltm1[pltm1 .== -9999] .= -1
@@ -1245,7 +1485,7 @@ function test_plot(initialised_model)
     plt_df.col = @. ifelse(plt_df.type == :trout, :blue, ifelse(plt_df.type == :smelt, :green, :red) )
 
    # sample a few fish to plot
-   kp_fish  = sample(plt_df[:,1], 10)
+   kp_fish  = sample(plt_df[:,1], n_fish_plot)
    plt_df_sub = plt_df[in.(plt_df.id, Ref(kp_fish)), :]
 
     # add fish to map
@@ -1259,59 +1499,23 @@ function test_plot(initialised_model)
 
 end
 
-initialised_model = initialize_model(
-    dims = (5, 5),                    # landscape size
-    max_littoral_depth = 0,            # basal resources  
-    res_k_lit = 50.0,
-    res_k_pel = 50.0,                
-    res_grow_r_lit = 0.15,
-    res_grow_r_pel = 0.15,
-    n_smelt = 50,                      # initial fish abund
-    n_koaro = 0,
-    n_trout = 0,
-    vision_smelt = 1,                   # vision
-    vision_koaro = 1,
-    vision_trout = 1,
-    resource_pref_adult_smelt = 0.99,   # prey preference
-    resource_pref_juv_smelt = 0.99,
-    resource_pref_adult_koaro = 0.01,
-    resource_pref_juv_koaro = 0.99,
-    prey_pref_trout = 0.99,
-    consume_amount_smelt = 10.0,        # resource consumption
-    consume_amount_koaro = 10.0,
-    Δenergy_smelt = 10.0,               # energy gained
-    Δenergy_koaro = 10.0,
-    Δenergy_trout = 50.0,
-    length_mean_smelt = 25.0,           # length
-    length_sd_smelt = 2.0,
-    #length_mean_koaro = 25.0,
-    #length_sd_koaro = 2.0,
-    #length_mean_trout = 25.0,
-    #length_sd_trout = 2.0,
-    growth_rate_smelt = 0.5,            # growth rate (mm/timestep)
-    growth_rate_koaro = 0.2,
-    growth_rate_trout = 0.5,
-    size_maturity_smelt = 15.0,         # adult size
-    size_maturity_koaro = 10.0,
-    #size_maturity_trout
-    breed_prob_smelt = 0.01,            # breeding prob
-    breed_prob_koaro = 0.01,
-    breed_prob_trout = 0.01,
-    fecundity_mean_smelt = 2.0,         # fecundity
-    fecundity_sd_smelt  = 1.0,
-    fecundity_mean_koaro = 2.0,
-    fecundity_sd_koaro = 1.0,
-    fecundity_mean_trout = 2.0,
-    fecundity_sd_trout = 1.0,
-    breed_mortality_smelt = 0.0,        # mortality spawning
-    breed_mortality_koaro = 0.7,
-    breed_mortality_trout = 0.0,
-    mortality_random_smelt = 0.0,      # mortality random
-    mortality_random_koaro = 0.01,
-    mortality_random_trout = 0.0
-)
 
+# green = smelt
+# red = koaro
+# blue = trout
 test_plot(initialised_model)
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # -----------------------------------------------------------------------------------------------------
@@ -1359,7 +1563,7 @@ GLMakie.activate!(inline = false)
 fig, ax, abmobs = abmplot(initialised_model;
     agent_step! = fish_step!,
     model_step! = resource_growth,
-    #params,
+    params,
     plotkwargs...)
 fig
 
